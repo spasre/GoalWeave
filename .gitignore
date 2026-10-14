@@ -1,0 +1,39 @@
+# ---------------- 自己的数据 / 配置：绝对不要提交 ----------------
+# 助手配置（接口地址 / 模型 / api key / 密码哈希）。server.py 读写的就是这个文件，
+# 里面有明文密钥；.env.example 是给人看格式用的空壳。
+.env
+.env.*
+*.env
+!.env.example
+
+# 看板数据：任务、回收站、目标与知识点、日程、聊天记录，settings 里还带着
+# 明文 api key 和密码哈希（勾了「记住密钥」时）
+config/*.json
+
+# 老版本存助手配置的位置（读到会自动搬进 .env），以及本机兜底数据的导出备份
+config/agent.json
+spasre-tasks-v1.json
+
+# ---------------- 生成物 ----------------
+# 学习路线图：目标页点一下就能重画，同名会覆盖；.evidence/ 是 Archify 的校验证据
+diagrams/
+
+# ---------------- 第三方 ----------------
+# skills/vendor/archify 是 vendored 进来的 Archify（MIT，许可证原文在那一层里）。
+# 只把运行要用的部分放进仓库，它自带的测试和示例留在本地，省掉 7 MB 左右。
+skills/vendor/archify/test/
+skills/vendor/archify/examples/
+
+# ---------------- Python ----------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ---------------- 编辑器 / 系统 ----------------
+.vscode/settings.local.json
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini

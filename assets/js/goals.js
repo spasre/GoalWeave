@@ -1,0 +1,2246 @@
+/* 长期目标页：把一条长期目标拆成文本大纲（内部是 DAG），再摊成每天的任务。
+   数据存在 tasks.js 的同一个 store 里（localStorage + 后端），所以任务板上勾掉一条
+   任务，对应知识点就算完成了。
+   图只留一张——后端 Archify 画的「学习路线图」，页面上不再手画 SVG。 */
+(function () {
+  "use strict";
+
+  const api = window.spasreTasks;
+  if (!api) {
+    console.warn("目标页需要 tasks.js 先加载。");
+    return;
+  }
+
+  const TITLE_UNITS = 12;
+  const TITLE_LINES = 2;
+  const MAX_NODES = 40;
+  const MAX_DEPS = 6;
+
+  const state = { editingId: "", openDiagram: "" };
+
+  /* ---------- 小工具 ---------- */
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function chip(text, className) {
+    return el("span", "task-chip" + (className ? " " + className : ""), text);
+  }
+
+  function setStatus(text) {
+    const node = document.getElementById("goal-status");
+    if (node) node.textContent = String(text || "");
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function shiftDate(key, days) {
+    const parts = String(key || "").split("-").map(Number);
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return String(key || "");
+    const date = new Date(parts[0], parts[1] - 1, parts[2]);
+    date.setDate(date.getDate() + days);
+    return date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate());
+  }
+
+  /* ---------- DAG：清洗、拓扑序、分层 ---------- */
+
+  // 只保留能用的节点：补 id、去重、丢掉不认识的前置、断掉环。
+  function sanitizeNodes(list) {
+    const raw = Array.isArray(list) ? list : [];
+    const used = new Set();
+    const nodes = [];
+    raw.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const title = String(item.title || item.name || "").trim();
+      if (!title) return;
+      let id = String(item.id || "").trim();
+      if (!id || used.has(id)) id = "n" + (nodes.length + 1);
+      while (used.has(id)) id += "_";
+      used.add(id);
+      const date = String(item.date || "").trim();
+      nodes.push({
+        id: id,
+        title: title,
+        brief: String(item.brief || item.detail || "").trim(),
+        rawDeps: Array.isArray(item.deps) ? item.deps : [],
+        links: item.links,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "",
+        done: Boolean(item.done)
+      });
+    });
+
+    const ids = new Set(nodes.map((node) => node.id));
+    nodes.forEach((node) => {
+      const seen = [];
+      node.rawDeps.forEach((dep) => {
+        const key = String(dep || "").trim();
+        if (!key || key === node.id || !ids.has(key) || seen.includes(key)) return;
+        seen.push(key);
+      });
+      node.deps = seen;
+      delete node.rawDeps;
+    });
+    return breakCycles(nodes);
+  }
+
+  // DFS 断回边：保证结果一定是 DAG，不然分层会算不出来。
+  function breakCycles(nodes) {
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const color = new Map();
+    const visit = (node) => {
+      color.set(node.id, 1);
+      const kept = [];
+      node.deps.forEach((dep) => {
+        const parent = byId.get(dep);
+        if (!parent) return;
+        const mark = color.get(parent.id) || 0;
+        if (mark === 1) return;
+        if (mark === 0) visit(parent);
+        kept.push(dep);
+      });
+      node.deps = kept;
+      color.set(node.id, 2);
+    };
+    nodes.forEach((node) => {
+      if ((color.get(node.id) || 0) === 0) visit(node);
+    });
+    return nodes;
+  }
+
+  // 层号 = 最长前置链的长度，等于「这一层最早能排到第几批」。
+  function topoLayers(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const byId = new Map(list.map((node) => [node.id, node]));
+    const memo = new Map();
+    const depth = (node) => {
+      if (memo.has(node.id)) return memo.get(node.id);
+      memo.set(node.id, 0);
+      let value = 0;
+      (node.deps || []).forEach((dep) => {
+        const parent = byId.get(dep);
+        if (parent && parent !== node) value = Math.max(value, depth(parent) + 1);
+      });
+      memo.set(node.id, value);
+      return value;
+    };
+    let max = 0;
+    list.forEach((node) => {
+      max = Math.max(max, depth(node));
+    });
+    const layers = [];
+    for (let index = 0; index <= max; index += 1) layers.push([]);
+    list.forEach((node) => layers[depth(node)].push(node));
+    return layers.filter((row) => row.length > 0);
+  }
+
+  function topoOrder(nodes) {
+    return topoLayers(nodes).reduce((acc, row) => acc.concat(row), []);
+  }
+
+  // Kahn 算法：全部节点都能出队才说明没有环。
+  function isAcyclic(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const byId = new Map(list.map((node) => [node.id, node]));
+    const indeg = new Map(list.map((node) => [node.id, 0]));
+    list.forEach((node) => {
+      (node.deps || []).forEach((dep) => {
+        if (byId.has(dep) && dep !== node.id) indeg.set(node.id, indeg.get(node.id) + 1);
+      });
+    });
+    const queue = list.filter((node) => indeg.get(node.id) === 0).map((node) => node.id);
+    let seen = 0;
+    while (queue.length > 0) {
+      const id = queue.shift();
+      seen += 1;
+      list.forEach((node) => {
+        if (!(node.deps || []).includes(id)) return;
+        indeg.set(node.id, indeg.get(node.id) - 1);
+        if (indeg.get(node.id) === 0) queue.push(node.id);
+      });
+    }
+    return seen === list.length;
+  }
+
+  /* ---------- 大纲（纯文本） ---------- */
+  // 知识点按层（阶段）写成缩进的文本。这份文本既是页面上显示的大纲，
+  // 也是存进目标里的那份记录（goal.outline），复制出去就能当学习笔记用。
+  function outlineText(title, nodes, meta) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    if (list.length === 0) return "";
+    const info = meta || {};
+    const layers = topoLayers(list);
+    const byId = new Map(list.map((node) => [node.id, node]));
+    const lines = [];
+    if (title) lines.push("# " + title);
+    const sums = [list.length + " 个知识点"];
+    if (layers.length > 1) sums.push(layers.length + " 个阶段");
+    if (info.weekly) sums.push("每周 " + info.weekly + " 小时");
+    if (info.pace && info.pace > 1) sums.push("每天 " + info.pace + " 个");
+    if (info.start && info.deadline) sums.push(info.start + " → " + info.deadline);
+    lines.push(sums.join(" · "));
+
+    layers.forEach((row, index) => {
+      lines.push("");
+      lines.push((index + 1) + ". 阶段 " + (index + 1));
+      row.forEach((node) => {
+        const bits = [];
+        const deps = (node.deps || [])
+          .map((dep) => byId.get(dep))
+          .filter(Boolean)
+          .map((parent) => parent.title);
+        if (deps.length > 0) bits.push("前置：" + deps.join("、"));
+        if (node.brief) bits.push(node.brief);
+        const link = (node.links || [])[0];
+        if (link && link.url) bits.push(link.url);
+        const when = node.date
+          ? "（" + String(node.date).slice(5) + (node.slot ? " " + api.slotTime(node.slot, node.hours) : "") + "）"
+          : "";
+        lines.push("   - " + node.title + when + (bits.length > 0 ? " —— " + bits.join(" · ") : ""));
+      });
+    });
+    return lines.join("\n");
+  }
+
+  function goalOutline(title, nodes, meta, options) {
+    const box = el("div", "goal-outline-box");
+    const text = outlineText(title, nodes, meta);
+    if (!text) {
+      box.append(el("p", "task-empty", "还没有大纲，点「重新规划」让助手排一份。"));
+      return box;
+    }
+    box.append(el("pre", "goal-outline", text));
+    if (!options || options.copy !== false) {
+      const copy = el("button", "task-action goal-outline-copy", "复制大纲");
+      copy.type = "button";
+      copy.addEventListener("click", () => copyOutline(text, copy));
+      box.append(copy);
+    }
+    return box;
+  }
+
+  async function copyOutline(text, button) {
+    const restore = () => window.setTimeout(() => { button.textContent = "复制大纲"; }, 2000);
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "已复制";
+    } catch (error) {
+      // 剪贴板被浏览器挡着（非 https / localhost）时退一步：把大纲选中，让用户自己按 Ctrl+C
+      const pre = button.parentElement ? button.parentElement.querySelector(".goal-outline") : null;
+      if (pre && window.getSelection) {
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      button.textContent = "已选中，按 Ctrl+C";
+    }
+    restore();
+  }
+
+  /* ---------- 内置规划 ---------- */
+
+  function topicOf(text) {
+    const raw = String(text || "").trim();
+    const stripped = raw
+      .replace(/^(?:长期目标|目标|计划)\s*[：:，,、]?\s*/, "")
+      .replace(/^(?:系统|好好|认真)?(?:学习|掌握|精通|入门|了解|熟悉|搞懂|研究|练习|提升|进阶|学)\s*/, "")
+      .replace(/^[的：:，,、\s]+/, "")
+      .trim();
+    return stripped || raw || "这个方向";
+  }
+
+  // 每层一个数组，层内顺序就是横向顺序；依赖只连到上一层，天然是 DAG。
+  function chainLayers(layers) {
+    const nodes = [];
+    const idsPerLayer = [];
+    layers.forEach((row, rowIndex) => {
+      const rowIds = row.map((node, colIndex) => {
+        const id = "n" + (nodes.length + 1);
+        node.id = id;
+        node.deps = [];
+        if (rowIndex > 0) {
+          const prev = idsPerLayer[rowIndex - 1];
+          if (prev.length === 1) {
+            node.deps = prev.slice();
+          } else if (row.length === 1) {
+            node.deps = prev.slice();
+          } else {
+            const same = prev[Math.min(colIndex, prev.length - 1)];
+            if (same) node.deps.push(same);
+            const left = prev[colIndex - 1];
+            if (left && left !== same) node.deps.push(left);
+          }
+        }
+        nodes.push(node);
+        return id;
+      });
+      idsPerLayer.push(rowIds);
+    });
+    return nodes;
+  }
+
+  function localGoalPlan(goal) {
+    const topic = topicOf(goal.title);
+    const refs = api.matchArticles(goal.title + " " + String(goal.detail || ""), 6);
+    const make = (title, brief, links) => ({ title: title, brief: brief, deps: [], links: links || [], date: "", done: false });
+    const doc = (ref) => make("读《" + ref.title + "》", ref.title, [ref]);
+
+    const layers = [
+      [make("搞清「" + topic + "」的核心概念与术语", "先建立整体印象，别急着抠细节")].concat(refs.slice(0, 2).map(doc)),
+      [
+        make("跟着资料跑一遍「" + topic + "」的最小例子", "跑通一遍比读十遍管用"),
+        make("记下「" + topic + "」容易踩的坑", "把报错和弯路记成清单")
+      ],
+      [make("弄懂「" + topic + "」最关键的一个机制", "挑一个核心机制，读到能讲给别人听")].concat(refs.slice(2, 4).map(doc)),
+      [
+        make("用「" + topic + "」完成一个小项目", "范围定小一点，能跑起来就行"),
+        make("拿「" + topic + "」解决一个真实问题", "最好是自己手头正烦的那件事")
+      ],
+      [make("写一篇「" + topic + "」的笔记", "讲清来龙去脉，写不出来的地方就是还没懂")]
+    ];
+    return chainLayers(layers);
+  }
+
+  /* ---------- 交给模型规划 ---------- */
+
+  function parseJson(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const body = fenced ? fenced[1].trim() : raw;
+    try {
+      return JSON.parse(body);
+    } catch (error) {
+      /* 模型爱在 JSON 前后加话，下面按括号截取 */
+    }
+    const pairs = [
+      [body.indexOf("{"), body.lastIndexOf("}")],
+      [body.indexOf("["), body.lastIndexOf("]")]
+    ];
+    for (const pair of pairs) {
+      if (pair[0] === -1 || pair[1] <= pair[0]) continue;
+      try {
+        return JSON.parse(body.slice(pair[0], pair[1] + 1));
+      } catch (error) {
+        /* 试下一种 */
+      }
+    }
+    return null;
+  }
+
+  function goalSystemPrompt() {
+    const catalog = api.articleSources().map((entry) => "- " + entry.title + "  " + entry.url).join("\n");
+    return [
+      "你在帮用户把一条长期目标拆成一张学习计划的知识点图（DAG）。",
+      "今天是 " + api.today() + "。",
+      "只输出一个 JSON 对象，不要写解释，也不要用 markdown 代码块。格式是：",
+      '{"reply": "给用户看的一两句话", "nodes": [{"title": "知识点", "brief": "一句话说明", "deps": ["前置知识点的 title"], "links": [{"title": "资料名", "url": "https://..."}]}]}',
+      "要求：",
+      "1. 8-14 个节点，从打基础一路排到实践和总结。",
+      "2. deps 里只能写这份计划里出现过的 title；最基础的节点 deps 给空数组。",
+      "3. 学习顺序必须满足拓扑序：每个节点只能依赖排在它前面的节点，绝对不要出现环。",
+      "4. links 只能从下面这份目录里挑 0-2 条，url 原样照抄，不要自己编：",
+      catalog,
+      "目录里没有对得上的就给空数组。"
+    ].join("\n");
+  }
+
+  // 模型的 deps 可能写成 title，也可能写成 1 开始的序号，两种都认。
+  function normalizeModelNodes(raw) {
+    const list = (Array.isArray(raw) ? raw : [])
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const title = String(item.title || item.name || "").trim();
+        if (!title) return null;
+        const deps = Array.isArray(item.deps)
+          ? item.deps
+          : Array.isArray(item.dependsOn)
+          ? item.dependsOn
+          : Array.isArray(item.requires)
+          ? item.requires
+          : [];
+        return {
+          title: title,
+          brief: String(item.brief || item.detail || item.summary || "").trim(),
+          deps: deps,
+          links: item.links
+        };
+      })
+      .filter(Boolean)
+      .slice(0, MAX_NODES);
+
+    const byTitle = new Map();
+    list.forEach((node, index) => {
+      if (!byTitle.has(node.title)) byTitle.set(node.title, index);
+      const lower = node.title.toLowerCase();
+      if (!byTitle.has(lower)) byTitle.set(lower, index);
+    });
+
+    return list.map((node, index) => {
+      const deps = [];
+      node.deps.forEach((dep) => {
+        let target = -1;
+        if (typeof dep === "number" && Number.isFinite(dep)) {
+          const guess = dep >= 1 && dep <= list.length ? dep - 1 : dep >= 0 && dep < list.length ? dep : -1;
+          target = guess;
+        } else {
+          const text = String(dep || "").trim();
+          if (!text) return;
+          if (byTitle.has(text)) target = byTitle.get(text);
+          else if (byTitle.has(text.toLowerCase())) target = byTitle.get(text.toLowerCase());
+        }
+        if (target < 0 || target === index) return;
+        const id = "m" + (target + 1);
+        if (!deps.includes(id)) deps.push(id);
+      });
+      return {
+        id: "m" + (index + 1),
+        title: node.title,
+        brief: node.brief,
+        deps: deps.slice(0, MAX_DEPS),
+        links: node.links,
+        section: node.section,
+        date: "",
+        done: false
+      };
+    });
+  }
+
+  async function modelGoalPlan(goal) {
+    const content = await api.agentChat(
+      [
+        { role: "system", content: goalSystemPrompt() },
+        {
+          role: "user",
+          content:
+            "长期目标：" +
+            goal.title +
+            (goal.detail ? "\n补充说明：" + goal.detail : "") +
+            "\n请把它拆成一张学习计划的知识点图。"
+        }
+      ],
+      { temperature: 0.3, maxTokens: 2400 }
+    );
+    const parsed = parseJson(content);
+    const raw = parsed && Array.isArray(parsed.nodes) ? parsed.nodes : Array.isArray(parsed) ? parsed : [];
+    const nodes = sanitizeNodes(normalizeModelNodes(raw));
+    if (nodes.length === 0) throw new Error("模型没给出可用的知识点");
+    const note = parsed && typeof parsed.reply === "string" ? parsed.reply.trim() : "";
+    return { nodes: nodes, note: note };
+  }
+
+  /* ---------- 交给后端技能规划（learn.curriculum） ---------- */
+
+  function skillBridge() {
+    return window.spasreBackend && typeof window.spasreBackend.run === "function" ? window.spasreBackend : null;
+  }
+
+  // 技能吐的是「阶段 → 知识点」，这里摊平成一份大纲；前置写成 title，交给 normalizeModelNodes 换 id。
+  function nodesFromCurriculum(result) {
+    const titled = new Map();
+    (result.sources || []).forEach((item) => {
+      if (item && item.url) titled.set(item.url, item.title || item.url);
+    });
+    const nodes = [];
+    (result.stages || []).forEach((stage) => {
+      const links = (stage.sources || []).map((url) => ({ title: titled.get(url) || url, url: url }));
+      (stage.units || []).forEach((unit) => {
+        const title = String(unit.name || "").trim();
+        if (!title) return;
+        const type = String(unit.type || "").trim();
+        const acceptance = String(unit.acceptance || "").trim();
+        nodes.push({
+          title: title,
+          brief: (type ? "【" + type + "】" : "") + acceptance,
+          deps: Array.isArray(unit.dependsOn) ? unit.dependsOn : [],
+          links: links,
+          section: String(stage.name || "").trim(),
+          date: "",
+          done: false
+        });
+      });
+    });
+    return nodes.slice(0, MAX_NODES);
+  }
+
+  async function skillGoalPlan(goal) {
+    const bridge = skillBridge();
+    if (!bridge || !(await bridge.available())) throw new Error("后端不在");
+    const params = { goal: goal.title + (goal.detail ? "\n补充说明：" + goal.detail : "") };
+    const weekly = Number(goal.weekly);
+    const pace = Number(goal.pace);
+    if (Number.isFinite(weekly) && weekly > 0) {
+      params.weeklyHours = Math.min(60, Math.max(1, Math.round(weekly)));
+    } else if (Number.isFinite(pace) && pace > 0) {
+      params.weeklyHours = Math.min(60, Math.max(1, Math.round(pace * 14)));
+    }
+    const data = await bridge.run("learn.curriculum", params);
+    if (!data || data.ok === false) throw new Error((data && data.error) || "技能没跑通");
+    const result = data.result || {};
+    const nodes = sanitizeNodes(normalizeModelNodes(nodesFromCurriculum(result)));
+    if (nodes.length === 0) throw new Error("技能没给出可用的知识点");
+    const stats = result.stats || {};
+    const note = [
+      "由后端技能 learn.curriculum 拆的：" +
+        (stats.stages || 0) +
+        " 个阶段 / " +
+        (stats.units || nodes.length) +
+        " 个知识点（" +
+        (result.mode === "research" ? "先查资料再拆" : "直接拆") +
+        "）。",
+      String(result.notice || "").trim()
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return { nodes: nodes, note: note };
+  }
+
+  /* ---------- 排计划 ---------- */
+
+  // 模型 → 后端技能 → 内置模板，逐级回退。向导和「重新规划」共用这一条。
+  async function generateNodes(goal) {
+    let nodes = null;
+    let note = "";
+    let source = "local";
+
+    if (api.agentConfigured()) {
+      try {
+        const result = await modelGoalPlan(goal);
+        nodes = result.nodes;
+        note = result.note;
+        source = "api";
+      } catch (error) {
+        note = "模型这次没给出计划（" + (error && error.message ? error.message : "未知错误") + "）。";
+      }
+    }
+
+    // 没配模型（或模型没给出计划）时，试一下后端的 learn.curriculum 技能
+    if (!nodes || nodes.length === 0) {
+      try {
+        const result = await skillGoalPlan(goal);
+        nodes = result.nodes;
+        note = result.note;
+        source = "skill";
+      } catch (error) {
+        /* 后端不在或者技能没跑通，落到内置模板 */
+      }
+    }
+
+    if (!nodes || nodes.length === 0) {
+      nodes = localGoalPlan(goal);
+      source = "local";
+      if (!note) note = "内置模板：打基础 → 上手练习 → 深入原理 → 综合实践 → 输出总结。";
+    }
+
+    return { nodes: nodes, note: note, source: source };
+  }
+
+  async function planGoal(goalId) {
+    const goal = api.goal(goalId);
+    if (!goal) return null;
+    setStatus("正在排「" + goal.title + "」的学习计划…");
+    const result = await generateNodes(goal);
+    // 知识点换了，旧图作废：顺手重新画一张
+    const drawing = await drawRoadmap(goal.title, result.nodes);
+    const saved = api.updateGoal(goalId, {
+      nodes: result.nodes,
+      planSource: result.source,
+      planNote: result.note,
+      diagram: drawing.ok ? drawing.url : ""
+    });
+    const plan = planSchedule();
+    setStatus(
+      "排好了：" +
+        result.nodes.length +
+        " 个知识点" +
+        (plan.placed > 0 ? "，排进 " + plan.placed + " 天" : "") +
+        (plan.missed > 0 ? "，" + plan.missed + " 个没找到空段" : "") +
+        "。"
+    );
+    return saved;
+  }
+
+  /* ---------- 文字换行（SVG 里得自己折行） ---------- */
+
+  function textUnits(text) {
+    let width = 0;
+    Array.from(String(text || "")).forEach((char) => {
+      width += /[\u2e80-\u9fff\uff00-\uffef\u3000-\u303f]/.test(char) ? 1 : 0.56;
+    });
+    return width;
+  }
+
+  function wrapText(text, maxUnits, maxLines) {
+    const chars = Array.from(String(text || "").trim());
+    const lines = [];
+    let current = "";
+    let truncated = false;
+    for (const char of chars) {
+      if (current && textUnits(current + char) > maxUnits) {
+        if (lines.length === maxLines - 1) {
+          truncated = true;
+          break;
+        }
+        lines.push(current);
+        current = "";
+      }
+      current += char;
+    }
+    if (truncated) {
+      let last = current;
+      while (last && textUnits(last + "…") > maxUnits) last = last.slice(0, -1);
+      lines.push(last + "…");
+    } else if (current) {
+      lines.push(current);
+    }
+    if (lines.length === 0) lines.push("");
+    return lines.slice(0, maxLines);
+  }
+
+  /* ---------- 渲染 ---------- */
+
+
+  function goalCard(goal) {
+    const nodes = goal.nodes || [];
+    const done = nodes.filter((node) => node.done).length;
+    const card = el("article", "goal-card");
+    card.dataset.id = goal.id;
+
+    const head = el("div", "goal-head");
+    const heading = el("div", "goal-heading");
+    heading.append(el("h3", "goal-title", goal.title));
+    const meta = el("div", "goal-meta");
+    meta.append(chip(goal.category, "chip-category"));
+    meta.append(chip("开始 " + goal.startDate, "chip-date"));
+    if (goal.deadline) meta.append(chip("到 " + goal.deadline, "chip-date"));
+    if (goal.weekly) meta.append(chip("每周 " + goal.weekly + " 小时"));
+    meta.append(chip(done + " / " + nodes.length + " 完成", done > 0 && done === nodes.length ? "chip-done" : ""));
+    if (goal.planSource === "api") meta.append(chip("模型规划", "chip-agent"));
+    else if (goal.planSource === "skill") meta.append(chip("技能规划", "chip-agent"));
+    else if (goal.planSource === "local") meta.append(chip("内置规划", ""));
+    heading.append(meta);
+    head.append(heading);
+
+    const actions = el("div", "task-actions");
+    if (goal.diagram) {
+      const diagram = el("button", "task-action", state.openDiagram === goal.id ? "收起路线图" : "学习路线图");
+      diagram.type = "button";
+      diagram.dataset.action = "goal-diagram";
+      diagram.dataset.id = goal.id;
+      diagram.setAttribute("aria-expanded", String(state.openDiagram === goal.id));
+      actions.append(diagram);
+    }
+    [
+      ["goal-plan", "重新规划", false],
+      ["goal-tasks", "同步任务", false],
+      ["goal-edit", "编辑", false],
+      ["goal-remove", "删除", true]
+    ].forEach((entry) => {
+      const button = el("button", "task-action" + (entry[2] ? " task-action-danger" : ""), entry[1]);
+      button.type = "button";
+      button.dataset.action = entry[0];
+      button.dataset.id = goal.id;
+      actions.append(button);
+    });
+    head.append(actions);
+    card.append(head);
+
+    if (goal.detail) card.append(el("p", "goal-detail", goal.detail));
+
+    const bar = el("div", "goal-progress");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(nodes.length));
+    bar.setAttribute("aria-valuenow", String(done));
+    bar.setAttribute("aria-label", goal.title + " 的完成进度");
+    const fill = el("span", "goal-progress-fill");
+    fill.style.width = nodes.length > 0 ? Math.round((done / nodes.length) * 100) + "%" : "0%";
+    bar.append(fill);
+    card.append(bar);
+
+    card.append(goalOutline(goal.title, nodes, metaOf(goal)));
+    if (goal.diagram) card.append(goalDiagramBox(goal));
+    if (goal.planNote) card.append(el("p", "goal-note", goal.planNote));
+    return card;
+  }
+
+  // 学习路线图直接放卡片里跑：点一下在本页展开，不新开页面
+  function goalDiagramBox(goal) {
+    const box = el("div", "goal-diagram-box");
+    box.dataset.id = goal.id;
+    if (state.openDiagram === goal.id && goal.diagram) {
+      box.append(goalDiagramFrame(goal));
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+    }
+    return box;
+  }
+
+  function goalDiagramFrame(goal) {
+    const frame = document.createElement("iframe");
+    frame.className = "diagram-frame";
+    frame.src = goal.diagram;
+    frame.title = goal.title + "：学习路线图";
+    frame.loading = "lazy";
+    return frame;
+  }
+
+  function toggleGoalDiagram(button) {
+    const card = button.closest(".goal-card");
+    const goal = api.goal(button.dataset.id);
+    const box = card ? card.querySelector(".goal-diagram-box") : null;
+    if (!goal || !goal.diagram || !box) return;
+    const open = box.hidden;
+    if (open && box.childElementCount === 0) box.append(goalDiagramFrame(goal));
+    box.hidden = !open;
+    state.openDiagram = open ? goal.id : "";
+    button.textContent = open ? "收起路线图" : "学习路线图";
+    button.setAttribute("aria-expanded", String(open));
+  }
+
+  function renderGoals() {
+    const root = document.getElementById("goal-list");
+    if (!root) return;
+    renderCategoryOptions();
+    const list = api.goals();
+    const summary = document.getElementById("goal-summary");
+    root.replaceChildren();
+
+    if (list.length === 0) {
+      root.append(el("p", "task-empty", "还没有目标，点右下角 ＋ 新建一个。"));
+      if (summary) summary.textContent = "";
+      return;
+    }
+    if (summary) {
+      const nodes = list.reduce((sum, goal) => sum + (goal.nodes || []).length, 0);
+      const done = list.reduce((sum, goal) => sum + (goal.nodes || []).filter((node) => node.done).length, 0);
+      summary.textContent = list.length + " 个目标 · " + nodes + " 个知识点 · 已完成 " + done + " 个";
+    }
+    list.forEach((goal) => root.append(goalCard(goal)));
+  }
+
+  function renderCategoryOptions() {
+    const list = document.getElementById("goal-category-options");
+    if (!list) return;
+    list.replaceChildren();
+    api.categories().forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      list.append(option);
+    });
+  }
+
+  /* ---------- 新建目标向导 ---------- */
+
+  const wizard = { step: 1, goalId: "", nodes: [], note: "", source: "", diagram: "" };
+
+  function wzField(id) {
+    return document.getElementById(id);
+  }
+
+  function wzValue(id) {
+    const node = wzField(id);
+    return node ? String(node.value || "").trim() : "";
+  }
+
+  function setWzStatus(text) {
+    const node = wzField("wz-status");
+    if (node) node.textContent = String(text || "");
+  }
+
+  function sourceLabel(source) {
+    if (source === "api") return "模型生成";
+    if (source === "skill") return "技能生成";
+    return "内置模板";
+  }
+
+  function daysBetween(fromKey, toKey) {
+    const from = new Date(String(fromKey) + "T00:00:00");
+    const to = new Date(String(toKey) + "T00:00:00");
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) return 0;
+    return Math.round((to - from) / 86400000);
+  }
+
+  function paceFor(units, startKey, deadlineKey) {
+    if (!units) return 1;
+    const days = Math.max(1, daysBetween(startKey, deadlineKey) + 1);
+    return Math.max(1, Math.min(8, Math.ceil(units / days)));
+  }
+
+  /* ---------- 日程表：一天切几段，按每周投入把知识点填进去 ---------- */
+
+  // 段的定义在 tasks.js（DAY_SEGMENTS），这里只做「哪天、哪一段、多长时间」的分配
+  function segmentsWithMinutes() {
+    return api.segments().map((seg) => Object.assign({}, seg, { minutes: api.segmentMinutes(seg.key) }));
+  }
+
+  // 这段目标能用的日子：从今天（或目标的开始日，取晚的那个）到预期完成日
+  function planDays(startKey, deadlineKey) {
+    const today = api.today();
+    const start = String(startKey || "") > today ? String(startKey) : today;
+    if (!deadlineKey || String(deadlineKey) < start) return [start];
+    const days = [];
+    for (let date = start; date <= String(deadlineKey); date = shiftDate(date, 1)) {
+      days.push(date);
+      if (days.length >= 400) break;
+    }
+    return days;
+  }
+
+  // 一个知识点分到多久：每周投入 ÷ 这一周要做的个数（个数 = 知识点数 ÷ 总周数）
+  function hoursPerNode(goal, nodeCount, dayCount) {
+    const weekly = Math.max(1, Number(goal.weekly) || 7);
+    const hours = (weekly * Math.max(1, dayCount)) / (7 * Math.max(1, nodeCount));
+    return Math.max(0.5, Math.round(hours * 2) / 2);
+  }
+
+  function goalStamp(date, slot) {
+    return String(date || "") + ":" + String(slot || "");
+  }
+
+  // 统一排期：已经排好的（含别的目标）当一个一个占住的段，缺时间的填进空段里。
+  // dry = 只算不写，给向导第四步做预览用。
+  function planSchedule(options) {
+    const config = options || {};
+    const dry = Boolean(config.dry);
+    const segments = segmentsWithMinutes();
+    const order = api.segmentOrder().map((index) => segments[index]).filter(Boolean);
+    const busy = new Set(api.busy());
+    const taken = new Map();
+
+    const goals = dry ? api.goals().concat([config.goal]) : api.goals();
+    const planned = new Set();
+    const keepDay = new Map();
+    const details = [];
+    const stats = { placed: 0, pending: 0, hours: 0, days: 0, missed: 0 };
+
+    // 1. 先让手上排好的占位：老目标的时间尽量保持不变。
+    //    只有日期、没有时段的老数据（加时段之前排的）也把日期留着，只补一个段。
+    goals.forEach((goal) => {
+      (goal.nodes || []).forEach((node) => {
+        if (!node.date || node.date < api.today()) return;
+        const held = goalStamp(node.date, node.slot);
+        if (node.slot && api.segment(node.slot) && !taken.has(held)) {
+          taken.set(held, { goalId: goal.id, nodeId: node.id });
+          planned.add(goal.id + "/" + node.id);
+          return;
+        }
+        // 没时段、或者挂在一个已经删掉的段上：日期留着，只补一个段
+        keepDay.set(goal.id + "/" + node.id, node.date);
+      });
+    });
+
+    // 2. 再给还没排的节点找空段
+    goals.forEach((goal) => {
+      const nodes = goal.nodes || [];
+      if (nodes.length === 0) return;
+      const waiting = nodes.filter((node) => !planned.has(goal.id + "/" + node.id));
+      if (waiting.length === 0) return;
+      const days = planDays(goal.startDate, goal.deadline);
+      const hours = hoursPerNode(goal, nodes.length, days.length);
+      const rank = topoOrder(nodes);
+
+      const freeSegment = (date) => {
+        const open = order.filter((seg) => {
+          const stamp = goalStamp(date, seg.key);
+          if (busy.has(stamp) || taken.has(stamp)) return false;
+          // 今天已经过去的那几段不算空位
+          return !api.slotPassed(date, seg.key);
+        });
+        if (open.length === 0) return null;
+        // 装得下的里头按偏好挑（晚上 → 下午 → 上午 → 早上）：同一个目标的时间点才稳定
+        const fitting = open.filter((seg) => seg.minutes / 60 >= hours - 0.001);
+        if (fitting.length > 0) return fitting[0];
+        // 都装不下就用最长的那段，时长按段长砍
+        return open.reduce((best, seg) => (seg.minutes > best.minutes ? seg : best), open[0]);
+      };
+
+      waiting
+        .slice()
+        .sort((a, b) => rank.indexOf(a) - rank.indexOf(b))
+        .forEach((node, index) => {
+          const held = keepDay.get(goal.id + "/" + node.id);
+          const heldIndex = held ? days.indexOf(held) : -1;
+          const target = heldIndex >= 0 ? heldIndex : Math.floor(((index + 0.5) * days.length) / waiting.length);
+          let settled = false;
+          for (let step = 0; step < 12 && !settled; step += 1) {
+            const tries = step === 0 ? [target] : [target + step, target - step];
+            for (const dayIndex of tries) {
+              if (dayIndex < 0 || dayIndex >= days.length) continue;
+              const seg = freeSegment(days[dayIndex]);
+              if (!seg) continue;
+              node.date = days[dayIndex];
+              node.slot = seg.key;
+              node.hours = Math.min(hours, Math.round((seg.minutes / 60) * 2) / 2);
+              taken.set(goalStamp(node.date, node.slot), { goalId: goal.id, nodeId: node.id });
+              details.push({ goalId: goal.id, nodeId: node.id, title: node.title, date: node.date, slot: node.slot, hours: node.hours });
+              stats.placed += 1;
+              settled = true;
+              break;
+            }
+          }
+          if (!settled) {
+            // 这整段日子里都没有空位了：先空着，等用户放开一些段再说
+            node.date = "";
+            node.slot = "";
+            node.hours = 0;
+            stats.missed += 1;
+          }
+        });
+
+      stats.pending += waiting.length;
+      stats.hours = hours;
+      stats.days = days.length;
+      if (!dry) {
+        api.updateGoal(goal.id, {
+          nodes: nodes,
+          outline: outlineText(goal.title, nodes, metaOf(goal))
+        });
+        api.syncGoalTasks(goal.id);
+      }
+    });
+
+    return { placed: stats.placed, pending: stats.pending, hours: stats.hours, days: stats.days, missed: stats.missed, details: details };
+  }
+
+  function metaOf(goal) {
+    return { pace: goal.pace, weekly: goal.weekly, start: goal.startDate, deadline: goal.deadline };
+  }
+
+  /* ---------- 日程表：页面上那张网格 ---------- */
+
+  const sched = { weekStart: "", pick: null, drag: null, seg: "", note: "", draft: null, warn: "" };
+  // 多个目标共用一个网格，按顺序给每个目标一个颜色
+  const SCHED_RGB = ["84, 118, 172", "231, 155, 176", "72, 143, 138", "126, 96, 168", "240, 195, 154"];
+
+  function segRange(seg) {
+    return seg.start + "–" + seg.end;
+  }
+
+  // 正在改、还没保存的那份时间段存在本地，刷新/换页都不丢
+  const SCHED_DRAFT_KEY = "spasre-sched-draft";
+
+  function saveDraft() {
+    try {
+      if (sched.draft) window.localStorage.setItem(SCHED_DRAFT_KEY, JSON.stringify(sched.draft));
+      else window.localStorage.removeItem(SCHED_DRAFT_KEY);
+    } catch (error) {
+      // 隐私模式之类存不了就算了
+    }
+  }
+
+  function loadDraft() {
+    let list = null;
+    try {
+      list = JSON.parse(window.localStorage.getItem(SCHED_DRAFT_KEY) || "null");
+    } catch (error) {
+      list = null;
+    }
+    if (!Array.isArray(list) || list.length === 0) return null;
+    const rows = list
+      .map((seg) => (seg && typeof seg === "object" ? { key: String(seg.key || ""), start: String(seg.start || ""), end: String(seg.end || "") } : null))
+      .filter((seg) => seg && seg.key);
+    if (rows.length === 0) return null;
+    const now = api.segments();
+    const same = rows.length === now.length &&
+      rows.every((seg, index) => seg.key === now[index].key && seg.start === now[index].start && seg.end === now[index].end);
+    return same ? null : rows;
+  }
+
+  // 网格按哪份时段画：正在改但还没落盘的那份（draft）优先，否则就是存下来的那份。
+  // 冲突时先留着让用户看，所以草稿可能是不合法的 —— 排期、写盘都只认 api.segments()。
+  function schedRows() {
+    return sched.draft ? sched.draft : api.segments();
+  }
+
+  // 正在看的是哪一周也存在本地，刷新之后还是那一周
+  const SCHED_WEEK_KEY = "spasre-sched-week";
+
+  function saveWeek() {
+    try {
+      window.localStorage.setItem(SCHED_WEEK_KEY, String(sched.weekStart || ""));
+    } catch (error) {
+      // 存不了就算了
+    }
+  }
+
+  function loadWeek() {
+    try {
+      const saved = String(window.localStorage.getItem(SCHED_WEEK_KEY) || "");
+      return /^\d{4}-\d{2}-\d{2}$/.test(saved) ? saved : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  // 这一段过去了没：按网格上正在显示的那份时间算（草稿态下不能拿存着的那份去比）
+  function rowPassed(date, seg) {
+    const end = api.clockMinutes(seg.end);
+    if (end < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return false;
+    const stamp = new Date(String(date) + "T" + api.clockText(end) + ":00");
+    if (isNaN(stamp.getTime())) return false;
+    return stamp.getTime() <= Date.now();
+  }
+
+  // 手输时间：2130 / 930 / 9 / 21:30 / 21：30 → HH:MM，认不出来就原样留着让校验去提示
+  function normalizeClock(text) {
+    const raw = String(text || "").trim().replace(/[：.．。]/g, ":");
+    const digits = raw.replace(/[^\d]/g, "");
+    const hasColon = raw.indexOf(":") >= 0;
+    if (!hasColon && (digits.length === 3 || digits.length === 4)) {
+      const hours = Number(digits.slice(0, digits.length - 2));
+      const minutes = Number(digits.slice(-2));
+      if (hours <= 23 && minutes <= 59) return String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0");
+      return raw;
+    }
+    const match = /^(\d{1,2}):(\d{1,2})$/.exec(raw);
+    if (match) {
+      const hours = Number(match[1]);
+      const minutes = Number(match[2]);
+      if (hours <= 23 && minutes <= 59) return String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0");
+      return raw;
+    }
+    if (!hasColon && /^\d{1,2}$/.test(raw)) return String(Number(raw)).padStart(2, "0") + ":00";
+    return raw;
+  }
+
+  function weekStartOf(dateKey) {
+    const date = new Date(String(dateKey) + "T00:00:00");
+    if (isNaN(date.getTime())) return api.today();
+    return shiftDate(String(dateKey), -((date.getDay() + 6) % 7));
+  }
+
+  function weekdayLabel(dateKey) {
+    const date = new Date(String(dateKey) + "T00:00:00");
+    const index = isNaN(date.getTime()) ? 1 : date.getDay() === 0 ? 7 : date.getDay();
+    return "周" + "一二三四五六日"[index - 1];
+  }
+
+  // 每个「日期 + 段」上压着哪些知识点
+  function scheduleMap() {
+    const map = new Map();
+    api.goals().forEach((goal, index) => {
+      (goal.nodes || []).forEach((node) => {
+        if (!node.date || !node.slot || !api.segment(node.slot)) return;
+        const stamp = goalStamp(node.date, node.slot);
+        if (!map.has(stamp)) map.set(stamp, []);
+        map.get(stamp).push({ goal: goal, node: node, rgb: SCHED_RGB[index % SCHED_RGB.length] });
+      });
+    });
+    return map;
+  }
+
+  function scheduleCell(date, seg, entries, isBusy, isPast, isClash) {
+    const cell = el("div", "sched-cell");
+    if (isClash) cell.classList.add("is-clash");
+    if (isPast) cell.classList.add("is-past");
+    else if (entries.length === 0 && isBusy) cell.classList.add("is-busy");
+    if (!isPast && entries.length === 0 && !isBusy) cell.classList.add("is-free");
+    cell.dataset.date = date;
+    cell.dataset.slot = seg.key;
+    // 一格里有几个任务：任务块里标题能显示几行，就按它来（否则整块挤成一团）
+    cell.dataset.chips = String(Math.min(entries.length, 3));
+    if (entries.length === 0) {
+      const button = el("button", "sched-empty", !isPast && isBusy ? "非空闲" : "");
+      button.type = "button";
+      button.dataset.action = "sched-busy";
+      button.dataset.date = date;
+      button.dataset.slot = seg.key;
+      button.disabled = isPast;
+      button.title = isPast ? "这段时间已经过去了" : isBusy ? "恢复成空闲" : "把这段设为非空闲时间";
+      button.setAttribute("aria-label", button.title);
+      if (isPast) button.textContent = "";
+      cell.append(button);
+      return cell;
+    }
+    const overdue = api.overdue();
+    const locked = api.locked();
+    entries.forEach((entry) => {
+      const key = api.nodeKey(entry.goal.id, entry.node.id);
+      const done = Boolean(entry.node.done);
+      const late = !done && overdue.indexOf(key) >= 0;
+      const blocked = !done && !late && locked.indexOf(key) >= 0;
+      // 过去的格子：做完了显示「已完成」，没做就变成一个「重排」按钮
+      if (isPast && done) {
+        const chip = el("div", "sched-chip is-done");
+        chip.append(el("span", "sched-chip-title", entry.node.title));
+        chip.append(el("span", "sched-time", "已完成 · " + api.slotTime(seg.key, entry.node.hours)));
+        chip.title = "【" + entry.goal.title + "】" + entry.node.title + "：已完成";
+        cell.append(chip);
+        return;
+      }
+      if (late) {
+        const button = el("button", "sched-chip is-late");
+        button.type = "button";
+        button.dataset.action = "sched-overdue";
+        button.dataset.id = entry.goal.id;
+        button.dataset.node = entry.node.id;
+        button.title = "「" + entry.node.title + "」过期没做：点一下排到后面的空位里（会排在它后面的任务前面）";
+        button.append(el("span", "sched-chip-title", entry.node.title));
+        button.append(el("span", "sched-time", "过期没做 · 点这里重排"));
+        cell.append(button);
+        return;
+      }
+      const chip = el("button", "sched-chip" + (blocked ? " is-locked" : ""));
+      chip.type = "button";
+      chip.dataset.action = blocked ? "sched-locked" : "sched-pick";
+      chip.dataset.id = entry.goal.id;
+      chip.dataset.node = entry.node.id;
+      chip.draggable = !blocked;
+      chip.title = blocked
+        ? "「" + entry.node.title + "」的前置还没做：先把前面过期那个重排一下"
+        : "【" + entry.goal.title + "】" + entry.node.title + "：" + api.slotTime(seg.key, entry.node.hours) +
+          " · " + api.slotHours(seg.key, entry.node.hours) + " 小时 —— 拖到空闲的格子，或点一下改时间";
+      chip.style.setProperty("--sched-rgb", entry.rgb);
+      const hours = api.slotHours(seg.key, entry.node.hours);
+      chip.append(el("span", "sched-chip-title", entry.node.title));
+      // 行里只写时间：列窄，「· N 小时」放悬停提示里，免得被省略号截掉
+      chip.append(el("span", "sched-time", blocked ? "锁定 · " + api.slotTime(seg.key, hours) : api.slotTime(seg.key, hours)));
+      if (sched.pick && sched.pick.goalId === entry.goal.id && sched.pick.nodeId === entry.node.id) {
+        chip.classList.add("is-picked");
+      }
+      cell.append(chip);
+    });
+    return cell;
+  }
+
+  /* ---------- 拖拽改期：把任务块拖到空闲的格子上 ---------- */
+
+  // 只有「空着、且没被划成非空闲」的格子接得住拖过来的任务
+  function dropCellOf(target) {
+    if (!sched.drag || !target || typeof target.closest !== "function") return null;
+    return target.closest(".sched-cell.is-free");
+  }
+
+  function moveNodeTo(goalId, nodeId, date, slot) {
+    const goal = api.goal(goalId);
+    if (!goal || !api.segment(slot) || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return false;
+    // 挪到短一点的段里就把时长按段长砍，免得显示成「19:30–22:30 · 3 小时」
+    const limit = Math.round((api.segmentMinutes(slot) / 60) * 2) / 2;
+    const nodes = (goal.nodes || []).map((node) =>
+      node.id === nodeId
+        ? Object.assign({}, node, { date: date, slot: slot, hours: Math.max(0.5, Math.min(node.hours || limit, limit)) })
+        : node
+    );
+    api.updateGoal(goal.id, { nodes: nodes, outline: outlineText(goal.title, nodes, metaOf(goal)) });
+    api.syncGoalTasks(goal.id);
+    return true;
+  }
+
+  function wireScheduleDrag(wrap) {
+    if (wrap.dataset.dragWired) return;
+    wrap.dataset.dragWired = "1";
+
+    wrap.addEventListener("dragstart", (event) => {
+      const chip = event.target.closest(".sched-chip");
+      if (!chip) return;
+      sched.drag = { goalId: chip.dataset.id, nodeId: chip.dataset.node };
+      chip.classList.add("is-dragging");
+      wrap.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", chip.dataset.id + "/" + chip.dataset.node);
+      }
+    });
+
+    wrap.addEventListener("dragover", (event) => {
+      const cell = dropCellOf(event.target);
+      if (!cell) return;
+      event.preventDefault(); // 不拦下来就不会触发 drop
+      cell.classList.add("is-drop");
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    });
+
+    wrap.addEventListener("dragleave", (event) => {
+      const cell = dropCellOf(event.target);
+      if (cell) cell.classList.remove("is-drop");
+    });
+
+    wrap.addEventListener("drop", (event) => {
+      const cell = dropCellOf(event.target);
+      if (!cell) return;
+      event.preventDefault();
+      const drag = sched.drag;
+      sched.drag = null;
+      wrap.classList.remove("is-dragging");
+      moveNodeTo(drag.goalId, drag.nodeId, cell.dataset.date, cell.dataset.slot);
+    });
+
+    wrap.addEventListener("dragend", () => {
+      sched.drag = null;
+      wrap.classList.remove("is-dragging");
+      wrap.querySelectorAll(".is-drop").forEach((cell) => cell.classList.remove("is-drop"));
+      wrap.querySelectorAll(".is-dragging").forEach((chip) => chip.classList.remove("is-dragging"));
+    });
+  }
+
+  function renderSchedule() {
+    renderScheduleTable();
+    renderScheduleEdit();
+  }
+
+  // 时间段的问题一律挂在日程表顶部（跟上一段叠了、时间没填完、只剩一段），
+  // 没问题就把这一行收起来。有问题时右边给一个「按时间排序」——它只把行按开始时间排好，
+  // 一个字的时间都不改。sched.warn 放的是「这次没保存」这类一次性说明。
+  function renderScheduleWarn() {
+    const node = document.getElementById("sched-warn");
+    if (!node) return;
+    const problem = api.checkSegments(schedRows());
+    // 改了还没存：也在这行说一句，免得刷新之后忘了
+    const info = sched.draft && !problem ? "时间段有改动还没保存 —— 点行首的时间标签，按「保存」存下来。" : "";
+    const text = problem || sched.warn || info;
+    node.hidden = !text;
+    node.classList.toggle("is-info", !problem);
+    node.replaceChildren();
+    if (!text) return;
+    node.append(el("span", "sched-warn-text", text));
+  }
+
+  // 每分钟看一眼：时间往前走，有些段就变成「已经过去了」
+  let schedTick = 0;
+
+  function startScheduleClock() {
+    if (schedTick) return;
+    schedTick = window.setInterval(() => {
+      if (sched.drag) return; // 正在拖就先别动 DOM
+      if (document.getElementById("sched-wrap")) renderScheduleTable();
+    }, 60000);
+  }
+
+  function renderScheduleTable() {
+    const wrap = document.getElementById("sched-wrap");
+    if (!wrap) return;
+    renderScheduleWarn();
+    wireScheduleDrag(wrap);
+    startScheduleClock();
+    if (!sched.weekStart) sched.weekStart = loadWeek() || weekStartOf(api.today());
+    const today = api.today();
+    const busy = new Set(api.busy());
+    const map = scheduleMap();
+    const days = [];
+    for (let step = 0; step < 7; step += 1) days.push(shiftDate(sched.weekStart, step));
+    const range = document.getElementById("sched-range");
+    if (range) range.textContent = days[0].slice(5) + " → " + days[6].slice(5);
+
+    const table = el("table", "sched-table");
+    const head = el("thead");
+    const headRow = el("tr");
+    headRow.append(el("th", "sched-slot", ""));
+    days.forEach((date) => {
+      headRow.append(el("th", date === today ? "is-today" : "", weekdayLabel(date) + " " + date.slice(5)));
+    });
+    head.append(headRow);
+    table.append(head);
+
+    const body = el("tbody");
+    const clash = new Set(api.clashKeys(schedRows()));
+    schedRows().forEach((seg) => {
+      const row = el("tr");
+      const head = el("th", "sched-slot");
+      // 点时间标签就能改这一段（开始 / 结束 / 保存 / 删掉）
+      const label = el(
+        "button",
+        "sched-seg" + (sched.seg === seg.key ? " is-picked" : "") + (clash.has(seg.key) ? " is-clash" : ""),
+        segRange(seg)
+      );
+      label.type = "button";
+      label.dataset.action = "sched-seg";
+      label.dataset.key = seg.key;
+      label.title = clash.has(seg.key) ? "这段时间跟别的段叠了" : "改这一段的时间";
+      head.append(label);
+      row.append(head);
+      days.forEach((date) => {
+        const stamp = goalStamp(date, seg.key);
+        const cell = el("td");
+        cell.append(scheduleCell(date, seg, map.get(stamp) || [], busy.has(stamp), rowPassed(date, seg), clash.has(seg.key)));
+        row.append(cell);
+      });
+      body.append(row);
+    });
+    table.append(body);
+    wrap.replaceChildren(table);
+  }
+
+  function pickedNode() {
+    if (!sched.pick) return null;
+    const goal = api.goal(sched.pick.goalId);
+    if (!goal) return null;
+    const node = (goal.nodes || []).find((item) => item.id === sched.pick.nodeId);
+    return node ? { goal: goal, node: node } : null;
+  }
+
+  function renderScheduleEdit() {
+    const box = document.getElementById("sched-edit");
+    if (!box) return;
+    if (sched.seg) {
+      renderSegmentEdit(box);
+      return;
+    }
+    const picked = pickedNode();
+    if (!picked) {
+      sched.pick = null;
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    box.hidden = false;
+    box.replaceChildren();
+    box.append(el("span", "sched-edit-title", "【" + picked.goal.title + "】" + picked.node.title));
+
+    const dateField = el("label", "task-field");
+    dateField.append(el("span", null, "日期"));
+    const dateInput = document.createElement("input");
+    dateInput.className = "task-input";
+    dateInput.type = "date";
+    dateInput.min = api.today();
+    dateInput.value = picked.node.date || api.today();
+    dateInput.addEventListener("change", () => movePicked(dateInput.value, "", 0));
+    dateField.append(dateInput);
+    box.append(dateField);
+
+    const slotField = el("label", "task-field");
+    slotField.append(el("span", null, "时段"));
+    const slotSelect = document.createElement("select");
+    slotSelect.className = "task-select";
+    schedRows().forEach((seg) => {
+      const option = document.createElement("option");
+      option.value = seg.key;
+      option.textContent = segRange(seg);
+      slotSelect.append(option);
+    });
+    slotSelect.value = picked.node.slot || schedRows()[0].key;
+    slotSelect.addEventListener("change", () => movePicked("", slotSelect.value, 0));
+    slotField.append(slotSelect);
+    box.append(slotField);
+
+    const hoursField = el("label", "task-field");
+    hoursField.append(el("span", null, "时长（小时）"));
+    const hoursInput = document.createElement("input");
+    hoursInput.className = "task-input";
+    hoursInput.type = "number";
+    hoursInput.min = "0.5";
+    hoursInput.max = "8";
+    hoursInput.step = "0.5";
+    const hourLimit = api.slotHours(slotSelect.value, picked.node.hours);
+    hoursInput.value = String(hourLimit);
+    hoursInput.max = String(api.segmentMinutes(slotSelect.value) / 60);
+    hoursInput.addEventListener("change", () => movePicked("", "", Number(hoursInput.value)));
+    hoursField.append(hoursInput);
+    box.append(hoursField);
+
+    const clear = el("button", "task-action task-action-danger", "取消安排");
+    clear.type = "button";
+    clear.dataset.action = "sched-clear";
+    box.append(clear);
+
+    if (sched.note) box.append(el("p", "task-hint sched-edit-note", sched.note));
+  }
+
+  // 改日期 / 时段 / 时长：改完立刻写回，页面自己会重画
+  function movePicked(date, slot, hours) {
+    const picked = pickedNode();
+    if (!picked) return;
+    const next = {
+      date: date || picked.node.date,
+      slot: slot || picked.node.slot,
+      hours: hours ? Math.max(0.5, hours) : picked.node.hours
+    };
+    if (api.slotPassed(next.date, next.slot)) {
+      sched.note = "这段时间已经过去了，换一段吧。";
+      renderSchedule();
+      return;
+    }
+    sched.note = "";
+    const nodes = (picked.goal.nodes || []).map((node) =>
+      node.id === picked.node.id ? Object.assign({}, node, next) : node
+    );
+    api.updateGoal(picked.goal.id, { nodes: nodes, outline: outlineText(picked.goal.title, nodes, metaOf(picked.goal)) });
+    api.syncGoalTasks(picked.goal.id);
+  }
+
+  function clearPicked() {
+    const picked = pickedNode();
+    if (!picked) return;
+    const nodes = (picked.goal.nodes || []).map((node) =>
+      node.id === picked.node.id ? Object.assign({}, node, { date: "", slot: "", hours: 0 }) : node
+    );
+    sched.pick = null;
+    api.updateGoal(picked.goal.id, { nodes: nodes, outline: outlineText(picked.goal.title, nodes, metaOf(picked.goal)) });
+    api.syncGoalTasks(picked.goal.id);
+  }
+
+  function toggleBusy(date, slot) {
+    if (!date || !api.segment(slot)) return;
+    const stamp = goalStamp(date, slot);
+    api.setBusy(date, slot, !api.busy().includes(stamp));
+  }
+
+  /* ---------- 过期没做的任务：重排 + 下游锁定 ---------- */
+
+  function setSchedStatus(text) {
+    sched.note = "";
+    const node = document.getElementById("sched-status");
+    if (node) node.textContent = String(text || "");
+  }
+
+  function slotStartTs(date, key) {
+    const seg = api.segment(key);
+    if (!seg) return NaN;
+    const start = new Date(String(date) + "T" + seg.start + ":00");
+    return isNaN(start.getTime()) ? NaN : start.getTime();
+  }
+
+  function slotEndTs(date, key) {
+    const seg = api.segment(key);
+    if (!seg) return NaN;
+    const end = new Date(String(date) + "T" + seg.end + ":00");
+    return isNaN(end.getTime()) ? NaN : end.getTime();
+  }
+
+  // 一个知识点的下流（所有直接/间接依赖它的），按拓扑序排好。
+  // 传进来的必须是准备写回的那份 nodes：这里返回的就是同一批对象，改它们才写得回去。
+  function downstreamOf(nodes, nodeId) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const found = new Set([nodeId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      list.forEach((node) => {
+        if (found.has(node.id)) return;
+        if ((node.deps || []).some((dep) => found.has(dep))) {
+          found.add(node.id);
+          grew = true;
+        }
+      });
+    }
+    found.delete(nodeId);
+    const rank = topoOrder(list);
+    return list.filter((node) => found.has(node.id)).sort((a, b) => rank.indexOf(a) - rank.indexOf(b));
+  }
+
+  // 挡住这个节点的、最近的一个「过期没做」的前置
+  function blockerOf(goal, nodeId) {
+    const nodes = goal.nodes || [];
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const overdue = api.overdue();
+    const queue = [(byId.get(nodeId) || {}).deps || []];
+    const seen = new Set([nodeId]);
+    while (queue.length > 0) {
+      const deps = queue.shift();
+      for (const dep of deps) {
+        if (seen.has(dep)) continue;
+        seen.add(dep);
+        if (overdue.indexOf(api.nodeKey(goal.id, dep)) >= 0) return byId.get(dep) || null;
+        const parent = byId.get(dep);
+        if (parent) queue.push(parent.deps || []);
+      }
+    }
+    return null;
+  }
+
+  // 把一个过期没做的知识点排到后面的空位：先保证在它下流任务之前，排不下就把下流一起往后让
+  function rescheduleOverdue(goalId, nodeId) {
+    const goal = api.goal(goalId);
+    if (!goal) return;
+    const nodes = (goal.nodes || []).map((node) => Object.assign({}, node));
+    const target = nodes.find((node) => node.id === nodeId);
+    if (!target) return;
+
+    const chain = [target].concat(downstreamOf(nodes, nodeId));
+    const busy = new Set(api.busy());
+    const taken = new Set();
+    nodes.forEach((node) => {
+      if (chain.some((item) => item.id === node.id)) return;
+      if (node.date && node.slot) taken.add(goalStamp(node.date, node.slot));
+    });
+
+    const segments = api.segments().map((seg) => Object.assign({}, seg, { minutes: api.segmentMinutes(seg.key) }));
+    const days = planDays(api.today(), goal.deadline || shiftDate(api.today(), 45));
+
+    const findSlot = (after) => {
+      for (const date of days) {
+        for (const seg of segments) {
+          const stamp = goalStamp(date, seg.key);
+          if (busy.has(stamp) || taken.has(stamp)) continue;
+          if (api.slotPassed(date, seg.key)) continue;
+          const start = new Date(date + "T" + seg.start + ":00").getTime();
+          if (!(start >= after)) continue;
+          return { date: date, seg: seg, start: start };
+        }
+      }
+      return null;
+    };
+
+    let floor = Date.now();
+    let moved = 0;
+    let failed = false;
+    chain.forEach((node) => {
+      const start = slotStartTs(node.date, node.slot);
+      const usable = !isNaN(start) && start >= floor && slotEndTs(node.date, node.slot) > Date.now();
+      if (usable) {
+        floor = start;
+        return;
+      }
+      const slot = findSlot(floor);
+      if (!slot) {
+        failed = true;
+        return;
+      }
+      node.date = slot.date;
+      node.slot = slot.seg.key;
+      node.hours = Math.min(node.hours || slot.seg.minutes / 60, slot.seg.minutes / 60);
+      taken.add(goalStamp(slot.date, slot.seg.key));
+      floor = slot.start;
+      moved += 1;
+    });
+
+    if (failed) {
+      setSchedStatus("这几天没空位了：先把日程表里的一些段留出来，或者把完成时间往后挪。");
+      return;
+    }
+
+    const placed = nodes.find((node) => node.id === nodeId);
+    api.updateGoal(goal.id, {
+      nodes: nodes,
+      outline: outlineText(goal.title, nodes, metaOf(goal))
+    });
+    api.syncGoalTasks(goal.id);
+    setSchedStatus(
+      "「" + target.title + "」排到了 " + placed.date.slice(5) + " " + api.slotTime(placed.slot, placed.hours) +
+        (moved > 1 ? "，后面的 " + (moved - 1) + " 个也跟着往后挪了。" : "。")
+    );
+  }
+
+  /* ---------- 日程表上的时间段：点时间标签就地改 ---------- */
+
+  function renderSegmentEdit(box) {
+    const segments = schedRows();
+    const index = segments.findIndex((seg) => seg.key === sched.seg);
+    if (index < 0) {
+      // 这一段在别处被删了
+      sched.seg = "";
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    const seg = segments[index];
+    box.hidden = false;
+    box.replaceChildren();
+
+    const field = (title, type, value, onSave, extra) => {
+      const wrap = el("label", "task-field");
+      wrap.append(el("span", null, title));
+      const input = document.createElement("input");
+      input.className = "task-input";
+      input.type = type;
+      input.value = value;
+      Object.keys(extra || {}).forEach((name) => input.setAttribute(name, extra[name]));
+      input.addEventListener("change", () => onSave(input.value));
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        onSave(input.value);
+      });
+      wrap.append(input);
+      box.append(wrap);
+      return input;
+    };
+
+    const clockField = { inputmode: "numeric", placeholder: "HH:MM", autocomplete: "off", spellcheck: "false" };
+    field("开始", "text", seg.start, (value) => stageSegment(seg.key, { start: normalizeClock(value) }), clockField);
+    field("结束", "text", seg.end, (value) => stageSegment(seg.key, { end: normalizeClock(value) }), clockField);
+
+    const save = el("button", "task-action sched-save", "保存");
+    save.type = "button";
+    save.dataset.action = "segment-save";
+    save.title = "存下这段时间的时间：顺手按开始时间排好，有重叠会标红提醒";
+    box.append(save);
+
+    const remove = el("button", "task-action task-action-danger", "删掉这段");
+    remove.type = "button";
+    remove.dataset.action = "segment-remove";
+    remove.dataset.key = seg.key;
+    remove.disabled = segments.length <= 1;
+    remove.title = segments.length <= 1 ? "至少要留一段" : "这一段不要了";
+    box.append(remove);
+
+    if (segments.length <= 1) box.append(el("p", "task-hint sched-edit-note", "至少要留一段。"));
+  }
+
+  // 改时间：先生效在草稿里（存本地，刷新也不丢），按「保存」才写进数据
+  function stageSegment(key, patch) {
+    const segments = schedRows();
+    const index = segments.findIndex((seg) => seg.key === key);
+    if (index < 0) return;
+    const next = segments.map((seg, position) => (position === index ? Object.assign({}, seg, patch) : seg));
+    sched.seg = key;
+    sched.draft = next;
+    sched.warn = "";
+    saveDraft();
+    renderSchedule();
+  }
+
+  // 保存：按开始时间排好再存；有重叠就不存，只把冲突的段标红、顶部说一句「时间段有冲突」
+  function saveSegments() {
+    const rows = schedRows()
+      .map((seg) => Object.assign({}, seg))
+      .sort((a, b) => api.clockMinutes(a.start) - api.clockMinutes(b.start));
+    const problem = api.checkSegments(rows);
+    sched.warn = "";
+    if (problem) {
+      sched.draft = rows;
+      saveDraft();
+      renderSchedule();
+      return problem;
+    }
+    sched.draft = null;
+    saveDraft();
+    api.setSegments(rows);
+    sched.seg = ""; // 存好了就把下面那块设置收起来
+    renderSchedule();
+    return "";
+  }
+
+  // 一次改动的去处（加段 / 删段用）：合法就落盘，不合法就留在草稿里
+  function applySegments(next, keepKey) {
+    if (keepKey !== undefined && keepKey !== null) sched.seg = keepKey;
+    const problem = api.checkSegments(next);
+    sched.warn = "";
+    if (!problem) {
+      sched.draft = null;
+      saveDraft();
+      api.setSegments(next);
+      renderScheduleTable(); // 只重画网格（顶层提示跟着更新），输入框里的光标留着
+      return "";
+    }
+    sched.draft = next;
+    saveDraft();
+    renderSchedule();
+    return problem;
+  }
+
+  // 这次编辑作废：丢掉草稿（本地那份也删掉），回到存着的时间段
+  function dropDraft() {
+    if (!sched.draft) return false;
+    sched.draft = null;
+    saveDraft();
+    sched.warn = "这段时间的改动没保存 —— 已经退回上一次的时间段。";
+    renderSchedule();
+    return true;
+  }
+
+  function addSegment() {
+    const rows = schedRows();
+    const last = rows.reduce(
+      (tip, seg) => (tip && api.clockMinutes(seg.end) <= api.clockMinutes(tip.end) ? tip : seg),
+      null
+    );
+    const start = last ? api.clockMinutes(last.end) : 8 * 60;
+    if (!last || start >= 23 * 60 + 59) {
+      sched.seg = last ? last.key : "";
+      sched.warn = "一天已经排到 23:59 了，先改掉最后一段的结束时间。";
+      renderSchedule();
+      return;
+    }
+    const end = Math.min(start + 60, 23 * 60 + 59);
+    const fresh = { key: "seg" + Date.now().toString(36), start: api.clockText(start), end: api.clockText(end) };
+    applySegments(rows.concat([fresh]), fresh.key);
+  }
+
+  function removeSegment(key) {
+    const rows = schedRows().filter((seg) => seg.key !== key);
+    applySegments(rows, rows.length > 0 ? rows[rows.length - 1].key : "");
+  }
+
+  function openWizard(goalId) {
+    const sheet = wzField("goal-sheet");
+    if (!sheet) return;
+    const goal = goalId ? api.goal(goalId) : null;
+    wizard.goalId = goal ? goal.id : "";
+    wizard.nodes = goal ? (goal.nodes || []).map((node) => Object.assign({}, node)) : [];
+    wizard.note = goal ? goal.planNote || "" : "";
+    wizard.source = goal ? goal.planSource || "" : "";
+    wizard.diagram = goal ? goal.diagram || "" : "";
+
+    const title = wzField("wz-title");
+    if (title) title.value = goal ? goal.title : "";
+    const detail = wzField("wz-detail");
+    if (detail) detail.value = goal ? goal.detail || "" : "";
+    const deadline = wzField("wz-deadline");
+    if (deadline) deadline.value = (goal && goal.deadline) || shiftDate(api.today(), 28);
+    const weekly = wzField("wz-weekly");
+    if (weekly) weekly.value = String((goal && goal.weekly) || 7);
+    const heading = wzField("goal-sheet-title");
+    if (heading) heading.textContent = goal ? "编辑目标" : "新建目标";
+
+    setWzStatus("");
+    renderWizardNodes();
+    gotoStep(1);
+    sheet.hidden = false;
+    if (title) title.focus();
+  }
+
+  function closeWizard() {
+    const sheet = wzField("goal-sheet");
+    if (sheet) sheet.hidden = true;
+  }
+
+  function gotoStep(step) {
+    wizard.step = Math.max(1, Math.min(4, step));
+    document.querySelectorAll("#goal-sheet .wizard-step").forEach((section) => {
+      section.hidden = Number(section.dataset.step) !== wizard.step;
+    });
+    document.querySelectorAll("#wz-steps li").forEach((item) => {
+      const index = Number(item.dataset.step);
+      item.classList.toggle("is-active", index === wizard.step);
+      item.classList.toggle("is-done", index < wizard.step);
+    });
+    const back = wzField("wz-back");
+    if (back) back.hidden = wizard.step === 1;
+    const next = wzField("wz-next");
+    if (next) next.textContent = wizard.step < 4 ? "下一步" : wizard.goalId ? "保存" : "创建";
+    if (wizard.step === 4) renderWizardSummary();
+  }
+
+  async function wizardNext() {
+    if (wizard.step === 1) {
+      if (!wzValue("wz-title")) {
+        setWzStatus("先写一个学习目标。");
+        const title = wzField("wz-title");
+        if (title) title.focus();
+        return;
+      }
+      setWzStatus("");
+      gotoStep(2);
+      return;
+    }
+    if (wizard.step === 2) {
+      const deadline = wzValue("wz-deadline");
+      if (!deadline || deadline <= api.today()) {
+        setWzStatus("预期完成时间要在今天之后。");
+        return;
+      }
+      setWzStatus("");
+      gotoStep(3);
+      await ensureWizardPlan();
+      return;
+    }
+    if (wizard.step === 3) {
+      if (wizard.nodes.length === 0) {
+        setWzStatus("还没有知识点，等大纲生成出来再往下走。");
+        return;
+      }
+      // 一个目标的知识点数不能超过它这段日子——多了就排不开
+      const days = planDays(api.today(), wzValue("wz-deadline"));
+      if (wizard.nodes.length > days.length) {
+        setWzStatus(
+          wizard.nodes.length + " 个知识点，可用只有 " + days.length + " 天（" + api.today() + " → " +
+            wzValue("wz-deadline") + "）：把完成时间往后挪，或者删掉几个知识点。"
+        );
+        return;
+      }
+      setWzStatus("");
+      gotoStep(4);
+      return;
+    }
+    finishWizard();
+  }
+
+  // 进第三步该有的都补齐：知识点 → 大纲 → 学习路线图，一次做完
+  async function ensureWizardPlan() {
+    if (wizard.nodes.length === 0) {
+      await generateWizardNodes();
+      if (wizard.nodes.length === 0) return; // 生成失败时状态行里已经有原因
+    } else {
+      renderWizardNodes();
+    }
+    if (wizard.diagram) {
+      showDiagram(wizard.diagram); // 这张图还在，直接摆出来（不重跑）
+      setWzStatus(planStatus(""));
+    } else {
+      await renderWizardDiagram();
+    }
+  }
+
+  async function generateWizardNodes() {
+    const goal = {
+      title: wzValue("wz-title"),
+      detail: wzValue("wz-detail"),
+      startDate: api.today(),
+      weekly: Number(wzValue("wz-weekly")) || 7
+    };
+    setWzStatus("正在生成大纲…");
+    const result = await generateNodes(goal);
+    wizard.nodes = result.nodes;
+    wizard.note = result.note;
+    wizard.source = result.source;
+    wizard.diagram = ""; // 知识点换了，之前那张路线图就对不上了
+    renderWizardNodes();
+    setWzStatus(planStatus(""));
+  }
+
+  // 只重画大纲那一块：节点列表里有正在编辑的输入框，整块重画会把光标弄丢
+  function refreshWizardOutline() {
+    const box = wzField("wz-outline");
+    if (!box) return;
+    box.replaceChildren();
+    if (wizard.nodes.length === 0) return;
+    box.append(goalOutline(wzValue("wz-title") || "学习大纲", wizard.nodes, {
+      weekly: Number(wzValue("wz-weekly")) || 7,
+      start: api.today(),
+      deadline: wzValue("wz-deadline")
+    }));
+  }
+
+  let outlineTimer = 0;
+
+  function queueOutlineRefresh() {
+    if (outlineTimer) window.clearTimeout(outlineTimer);
+    outlineTimer = window.setTimeout(() => {
+      outlineTimer = 0;
+      refreshWizardOutline();
+    }, 400);
+  }
+
+  function renderWizardNodes() {
+    refreshWizardOutline();
+
+    // 大纲变了，上一张学习路线图就过期了，先收起来
+    const diagramBox = wzField("wz-diagram-box");
+    if (diagramBox) {
+      diagramBox.replaceChildren();
+      diagramBox.hidden = true;
+    }
+
+    const list = wzField("wz-nodes");
+    if (!list) return;
+    list.replaceChildren();
+    wizard.nodes.forEach((node) => {
+      const row = el("li", "node-row");
+
+      const title = document.createElement("input");
+      title.className = "task-input";
+      title.value = node.title;
+      title.placeholder = "知识点";
+      title.addEventListener("input", () => {
+        node.title = title.value;
+        markDiagramStale();
+        queueOutlineRefresh();
+      });
+      row.append(title);
+
+      const url = document.createElement("input");
+      url.className = "task-input node-url";
+      const link = (node.links || [])[0];
+      url.value = link ? link.url : "";
+      url.placeholder = "教程链接";
+      url.addEventListener("input", () => {
+        const value = url.value.trim();
+        node.links = value ? [{ title: (link && link.title) || value, url: value }] : [];
+        markDiagramStale();
+        queueOutlineRefresh();
+      });
+      row.append(url);
+
+      if (node.section) row.append(el("span", "node-hint", node.section));
+
+      const remove = el("button", "task-action task-action-danger", "删");
+      remove.type = "button";
+      remove.addEventListener("click", () => {
+        wizard.nodes = wizard.nodes.filter((item) => item !== node);
+        renderWizardNodes();
+        markDiagramStale();
+      });
+      row.append(remove);
+      list.append(row);
+    });
+  }
+
+  function renderWizardSummary() {
+    const box = wzField("wz-summary");
+    if (!box) return;
+    const start = api.today();
+    const deadline = wzValue("wz-deadline") || shiftDate(start, 28);
+    const weekly = Number(wzValue("wz-weekly")) || 7;
+    const units = wizard.nodes.length;
+    const days = Math.max(1, daysBetween(start, deadline) + 1);
+    box.textContent =
+      units + " 个知识点 · 每周 " + weekly + " 小时 · 每次约 " + hoursPerNode({ weekly: weekly }, units, days) +
+      " 小时 · " + start + " → " + deadline + "（" + days + " 天）";
+
+    const preview = wzField("wz-preview");
+    if (!preview) return;
+    preview.replaceChildren();
+    if (units === 0) return;
+    const plan = planSchedule({
+      dry: true,
+      goal: {
+        id: "wizard",
+        title: wzValue("wz-title"),
+        startDate: start,
+        deadline: deadline,
+        weekly: weekly,
+        nodes: JSON.parse(JSON.stringify(wizard.nodes))
+      }
+    });
+    const list = el("ul", "sched-preview");
+    plan.details.slice(0, 10).forEach((item) => {
+      const row = el("li");
+      row.append(el("span", "sched-when", String(item.date).slice(5) + " " + api.slotTime(item.slot, item.hours)));
+      row.append(el("span", null, item.title));
+      list.append(row);
+    });
+    preview.append(list);
+    if (plan.details.length > 10) {
+      preview.append(el("p", "task-hint", "还有 " + (plan.details.length - 10) + " 条排在后面的日子。"));
+    }
+    if (plan.missed > 0) {
+      preview.append(el("p", "task-hint", "有 " + plan.missed + " 个知识点这几天没空位了。"));
+    }
+  }
+
+  function finishWizard() {
+    const title = wzValue("wz-title");
+    if (!title) {
+      gotoStep(1);
+      return;
+    }
+    const start = api.today();
+    const deadline = wzValue("wz-deadline");
+    const values = {
+      title: title,
+      detail: wzValue("wz-detail"),
+      startDate: start,
+      pace: paceFor(wizard.nodes.length, start, deadline),
+      deadline: deadline,
+      weekly: Number(wzValue("wz-weekly")) || 7
+    };
+    const goal = wizard.goalId ? api.updateGoal(wizard.goalId, values) : api.addGoal(values);
+    if (!goal) {
+      setStatus("没保存成功。");
+      return;
+    }
+    api.updateGoal(goal.id, {
+      nodes: wizard.nodes,
+      planSource: wizard.source,
+      planNote: wizard.note,
+      diagram: wizard.diagram
+    });
+    // 排期是全局的：新目标填进空段，别的目标手上排好的不动
+    const plan = planSchedule();
+    const queued = api.goalTasks(goal.id).length;
+    closeWizard();
+    setStatus(
+      "「" + goal.title + "」：" + wizard.nodes.length + " 个知识点" +
+        (queued > 0 ? "，排进 " + queued + " 天" : "") +
+        (plan.missed > 0 ? "，" + plan.missed + " 个没找到空段" : "") + "。"
+    );
+  }
+
+  // 把一张画好的学习路线图摆进向导（不重新生成）
+  function showDiagram(url) {
+    const box = wzField("wz-diagram-box");
+    if (!box) return;
+    const frame = document.createElement("iframe");
+    frame.className = "diagram-frame";
+    frame.src = url;
+    frame.title = "学习路线图";
+    box.replaceChildren(frame);
+    box.hidden = false;
+  }
+
+  // 只在出错或图过期时给一个按钮——平时不摆按钮，但该有路走的时候得有
+  function showDiagramRetry(message, action, label) {
+    const box = wzField("wz-diagram-box");
+    setWzStatus(message);
+    if (!box) return;
+    const retry = el("button", "task-action", label || "重试");
+    retry.type = "button";
+    retry.addEventListener("click", () => {
+      box.replaceChildren();
+      box.hidden = true;
+      action();
+    });
+    box.replaceChildren(retry);
+    box.hidden = false;
+  }
+
+  // 知识点改过了，挂着的那张图就不作数了：清掉地址，并给一个「重新画」的入口
+  function markDiagramStale() {
+    if (!wizard.diagram) return;
+    wizard.diagram = "";
+    showDiagramRetry("大纲改过了，这张学习路线图是旧的。", renderWizardDiagram, "重新画一张");
+  }
+
+  // 让后端用 Archify 技能出一张学习路线图（能缩放、能导出的独立 HTML）
+  async function drawRoadmap(title, nodes) {
+    const bridge = skillBridge();
+    if (!bridge) return { ok: false, error: "后端没在跑，出不了图。" };
+    try {
+      const payload = await bridge.run("diagram.roadmap", {
+        title: title + "：学习路线图",
+        subtitle: "共 " + nodes.length + " 个知识点",
+        nodes: nodes.map((node) => ({
+          id: node.id,
+          title: node.title,
+          brief: node.brief || "",
+          deps: node.deps || [],
+          links: node.links || []
+        }))
+      });
+      return (payload && payload.result) || { ok: false, error: "后端没回话。" };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  }
+
+  async function renderWizardDiagram() {
+    if (wizard.nodes.length === 0) {
+      setWzStatus("还没有知识点，先把大纲生成出来。");
+      return;
+    }
+    setWzStatus("正在画学习路线图…");
+    const info = await drawRoadmap(wzValue("wz-title"), wizard.nodes);
+    if (!info.ok) {
+      showDiagramRetry("没画成：" + (info.error || "看后端日志"), renderWizardDiagram);
+      return;
+    }
+    showDiagram(info.url);
+    wizard.diagram = info.url;
+    setWzStatus(planStatus("学习路线图 " + info.seconds + " 秒"));
+  }
+
+  // 第三步的状态行：知识点数 · 怎么来的 ·（画好了就是）路线图用了多久
+  function planStatus(tail) {
+    const parts = [wizard.nodes.length + " 个知识点"];
+    const source = sourceLabel(wizard.source);
+    if (source) parts.push(source);
+    if (tail) parts.push(tail);
+    return parts.join(" · ");
+  }
+
+  function wireWizard() {
+    const sheet = wzField("goal-sheet");
+    if (!sheet) return;
+    const fab = wzField("fab-new-goal");
+    if (fab) fab.addEventListener("click", () => openWizard(""));
+    const next = wzField("wz-next");
+    if (next) next.addEventListener("click", wizardNext);
+    const back = wzField("wz-back");
+    if (back) back.addEventListener("click", () => gotoStep(wizard.step - 1));
+    sheet.addEventListener("click", (event) => {
+      if (event.target === sheet || event.target.closest("[data-sheet-close]")) closeWizard();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !sheet.hidden) closeWizard();
+    });
+  }
+
+  /* ---------- 事件 ---------- */
+
+  function handleAction(event) {
+    const trigger = event.target.closest("[data-action]");
+    if (!trigger) return;
+    const action = trigger.dataset.action;
+    const id = trigger.dataset.id;
+
+    if (action === "sched-prev" || action === "sched-next") {
+      const base = sched.weekStart || weekStartOf(api.today());
+      sched.weekStart = shiftDate(base, action === "sched-prev" ? -7 : 7);
+      saveWeek();
+      renderSchedule();
+      return;
+    }
+
+    if (action === "sched-today") {
+      sched.weekStart = weekStartOf(api.today());
+      saveWeek();
+      renderSchedule();
+      return;
+    }
+
+    if (action === "sched-overdue") {
+      rescheduleOverdue(trigger.dataset.id, trigger.dataset.node);
+      return;
+    }
+
+    if (action === "sched-locked") {
+      const goal = api.goal(trigger.dataset.id);
+      const blocker = goal ? blockerOf(goal, trigger.dataset.node) : null;
+      setSchedStatus(
+        blocker
+          ? "先重排「" + blocker.title + "」：它过期了还没做，点它的「重排」再往下走。"
+          : "前面的任务还没做完，先把它排到后面的时间。"
+      );
+      renderSchedule();
+      return;
+    }
+
+    if (action === "sched-seg") {
+      sched.seg = trigger.dataset.key || "";
+      sched.pick = null;
+      sched.note = "";
+      sched.warn = "";
+      renderSchedule();
+      return;
+    }
+
+    if (action === "segment-add") {
+      addSegment();
+      return;
+    }
+
+    if (action === "segment-save") {
+      saveSegments();
+      return;
+    }
+
+    if (action === "segment-remove") {
+      removeSegment(trigger.dataset.key || sched.seg);
+      return;
+    }
+
+    if (action === "sched-busy") {
+      toggleBusy(trigger.dataset.date, trigger.dataset.slot);
+      return;
+    }
+
+    if (action === "sched-pick") {
+      dropDraft(); // 离开时段面板 = 这次编辑结束，还叠着就不保存
+      sched.pick = { goalId: id, nodeId: trigger.dataset.node };
+      sched.seg = "";
+      sched.note = "";
+      renderSchedule();
+      return;
+    }
+
+    if (action === "sched-clear") {
+      clearPicked();
+      return;
+    }
+
+    if (action === "goal-diagram") {
+      toggleGoalDiagram(trigger);
+      return;
+    }
+
+    if (action === "goal-plan") {
+      planGoal(id);
+      return;
+    }
+
+    if (action === "goal-tasks") {
+      const created = api.syncGoalTasks(id);
+      setStatus(created.length > 0 ? "加了 " + created.length + " 条每日任务。" : "任务已经和计划对上了，没有漏的。");
+      return;
+    }
+
+    if (action === "goal-edit") {
+      openWizard(id);
+      return;
+    }
+
+    if (action === "goal-remove") {
+      const goal = api.goal(id);
+      if (!goal) return;
+      if (!window.confirm("删除目标「" + goal.title + "」？它的任务会一起删掉。")) return;
+      api.removeGoal(id, { withTasks: true });
+      setStatus("删掉了。");
+    }
+  }
+
+  function wireGoals() {
+    // 日程表和目标列表挂在同一个根上，一次委托就够
+    const root = document.getElementById("top") || document.getElementById("goal-board");
+    if (root) {
+      root.addEventListener("click", handleAction);
+      root.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const trigger = event.target.closest("[data-action]");
+        if (!trigger) return;
+        event.preventDefault();
+        trigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    }
+    wireWizard();
+    // Esc 关掉时段面板；这次编辑结束，还叠着就不保存
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !sched.seg) return;
+      const sheet = document.getElementById("goal-sheet");
+      if (sheet && !sheet.hidden) return; // 向导开着的时候 Esc 归向导
+      sched.seg = "";
+      if (!dropDraft()) {
+        sched.note = "";
+        renderSchedule();
+      }
+    });
+    document.addEventListener("spasre:change", function () {
+      // 只有草稿里的段被别处删了才丢：点「非空闲」、改任务这些不该动它
+      if (sched.draft && sched.draft.some((seg) => !api.segment(seg.key))) {
+        sched.draft = null;
+        saveDraft();
+      }
+      renderGoals();
+      renderSchedule();
+    });
+  }
+
+  /* ---------- boot ---------- */
+
+  // 之前排好的节点只有日期、没有时段（那时候一天一段），或者挂在一个已经删掉的段上：
+  // 补一次，日程表才是对的。后端的存储可能在页面加载后才被采纳（bootRemote 是异步的），
+  // 所以后端上线、数据变化时都再看一眼。
+  function ensureScheduled() {
+    const loose = api.goals().some((goal) =>
+      (goal.nodes || []).some((node) => node.date && !api.segment(node.slot))
+    );
+    if (loose) planSchedule();
+  }
+
+  wireGoals();
+  // 上次改了还没保存的那份时间段（存在本地）接着用
+  sched.draft = loadDraft();
+  ensureScheduled();
+  renderGoals();
+  renderSchedule();
+  document.addEventListener("spasre:change", ensureScheduled);
+  document.addEventListener("spasre:backend", (event) => {
+    if (event && event.detail && event.detail.online) ensureScheduled();
+  });
+
+  window.spasreGoals = {
+    version: 1,
+    goals: api.goals,
+    goal: api.goal,
+    plan: localGoalPlan,
+    planGoal: planGoal,
+    generateNodes: generateNodes,
+    outline: outlineText,
+    openWizard: openWizard,
+    modelPlan: modelGoalPlan,
+    skillPlan: skillGoalPlan,
+    sanitize: sanitizeNodes,
+    layers: topoLayers,
+    order: topoOrder,
+    acyclic: isAcyclic,
+    wrapText: wrapText,
+    schedule: planSchedule,
+    renderSchedule: renderSchedule,
+    render: function () {
+      renderGoals();
+      renderSchedule();
+    },
+    status: setStatus,
+    editing: function () {
+      return state.editingId;
+    }
+  };
+})();

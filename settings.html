@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <script>
+    try {
+      const root = document.documentElement;
+      const savedTheme = localStorage.getItem("spasre-theme");
+      if (savedTheme === "light" || savedTheme === "dark") {
+        root.dataset.theme = savedTheme;
+        document.querySelector('meta[name="theme-color"]').content =
+          savedTheme === "dark" ? "#121620" : "#f6f7fb";
+      }
+      // 密度 / 字号也先落好，免得刷新时闪一下
+      const look = JSON.parse(localStorage.getItem("spasre-look") || "null") || {};
+      if (look.density === "compact") root.dataset.density = "compact";
+      if (look.font === "small" || look.font === "large") root.dataset.font = look.font;
+    } catch (error) {
+      console.warn("Unable to read the saved appearance preferences.", error);
+    }
+  </script>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <meta name="description" content="任务板设置：外观（密度 / 字号）、兴趣标签（含每日推荐开关）、助手配置与导入导出。">
+  <title>设置 — 任务板</title>
+</head>
+<body>
+  <canvas id="petals" aria-hidden="true"></canvas>
+  <div class="page">
+    <header class="site-header">
+      <a class="wordmark" href="index.html" aria-label="任务板，返回首页">
+        <span class="mark" aria-hidden="true">s</span>
+        <span>任务板</span>
+      </a>
+      <div class="header-tools">
+        <nav class="nav" aria-label="主导航">
+          <a href="index.html">首页</a>
+          <a href="tasks.html">任务</a>
+          <a href="goals.html">目标</a>
+          <a href="settings.html" aria-current="page">设置</a>
+        </nav>
+        <div class="header-actions">
+          <button class="theme-toggle" type="button" aria-label="切换夜间模式" aria-pressed="false" title="切换夜间模式">
+            <svg class="auto-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4Z" fill="currentColor"/>
+            </svg>
+            <svg class="moon-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">              <path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9 8.6 8.6 0 1 0 20.1 15.2Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="m17.5 4 .5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5.5-1.5Z" fill="currentColor"/>
+            </svg>
+            <svg class="sun-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" hidden>
+              <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+    <main id="top">
+      <section class="page-bar">
+        <h1>设置</h1>
+      </section>
+
+      <section class="task-panel-block" aria-labelledby="settings-look-title" id="settings-look">
+        <h2 class="task-panel-title" id="settings-look-title">外观</h2>
+        <div class="task-panel-grid">
+          <label class="task-field">
+            <span>密度</span>
+            <select class="task-select" id="look-density">
+              <option value="comfy">宽松</option>
+              <option value="compact">紧凑</option>
+            </select>
+          </label>
+          <label class="task-field">
+            <span>字号</span>
+            <select class="task-select" id="look-font">
+              <option value="small">小</option>
+              <option value="normal">标准</option>
+              <option value="large">大</option>
+            </select>
+          </label>
+        </div>
+        <p class="task-hint">这两项跟主题一样只存这台设备（换个浏览器各调各的），改完立刻生效。主题（亮色 / 暗色 / 跟随系统）点页眉右上角那个按钮循环切。</p>
+      </section>
+
+      <section class="task-panel-block" aria-labelledby="settings-interest-title" id="settings-interests">
+        <h2 class="task-panel-title" id="settings-interest-title">兴趣标签</h2>
+        <label class="task-check interest-daily">
+          <input type="checkbox" id="daily-recommend-toggle">
+          <span>每日推荐：每天加一条知识点</span>
+        </label>
+        <p class="task-hint" id="daily-recommend-hint" role="status"></p>
+        <div class="task-checks" id="interest-tags"></div>
+        <div class="interest-add">
+          <input class="task-input" type="text" id="interest-input" placeholder="输入一个兴趣，回车添加">
+          <button class="task-action" type="button" id="interest-add">添加</button>
+        </div>
+        <div class="interest-suggest">
+          <div class="interest-suggest-head">
+            <span class="task-hint" id="interest-suggest-hint">猜你感兴趣</span>
+            <button class="task-action" type="button" id="interest-refresh">换一批</button>
+          </div>
+          <div class="task-checks" id="interest-suggest-tags"></div>
+        </div>
+      </section>
+
+      <section class="task-panel-block" aria-labelledby="task-agent-title">
+        <h2 class="task-panel-title" id="task-agent-title">助手</h2>
+
+        <div class="task-agent-card" id="agent-summary" hidden>
+          <div class="task-agent-card-main">
+            <span class="task-agent-dot" aria-hidden="true"></span>
+            <div>
+              <p class="task-agent-card-title" id="agent-summary-title"></p>
+              <p class="task-agent-card-detail" id="agent-summary-detail"></p>
+            </div>
+          </div>
+          <div class="task-actions-cell">
+            <button class="task-action" type="button" id="agent-edit">改配置</button>
+            <button class="task-action" type="button" id="agent-export">导出 .env</button>
+            <button class="task-action" type="button" id="agent-import">导入 .env</button>
+            <input type="file" id="agent-import-file" accept=".env,text/plain" hidden>
+          </div>
+        </div>
+
+        <div class="task-agent-gate" id="agent-gate" hidden>
+          <p class="task-hint" id="agent-gate-hint"></p>
+          <div class="task-panel-grid">
+            <label class="task-field">
+              <span id="agent-pw-label">密码</span>
+              <input class="task-input" type="password" id="agent-password" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="task-field" id="agent-pw-confirm-field" hidden>
+              <span>再输一遍</span>
+              <input class="task-input" type="password" id="agent-password-confirm" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="task-actions-cell">
+              <button class="task-submit" type="button" id="agent-gate-submit">解锁</button>
+              <button class="task-action" type="button" id="agent-gate-cancel">取消</button>
+            </div>
+          </div>
+          <p class="task-agent-status" id="agent-gate-status" role="status"></p>
+        </div>
+
+        <div id="agent-setup">
+          <div class="task-panel-grid">
+            <label class="task-field">
+              <span>模型接口地址</span>
+              <input class="task-input" type="url" id="agent-base" placeholder="https://api.deepseek.com/v1" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="task-field">
+              <span>模型名</span>
+              <input class="task-input" type="text" id="agent-model" placeholder="deepseek-chat" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="task-field">
+              <span>密钥</span>
+              <input class="task-input" type="password" id="agent-key" placeholder="本地模型可留空" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="task-actions-cell task-agent-tools">
+              <label class="task-check">
+                <input type="checkbox" id="agent-remember-key">
+                <span>记住密钥</span>
+              </label>
+              <button class="task-action" type="button" id="agent-test">测试连接</button>
+              <button class="task-action" type="button" id="agent-collapse" hidden>收起</button>
+            </div>
+          </div>
+          <p class="task-hint">OpenAI 兼容地址，自动补 <code>/chat/completions</code>；本地模型填 <code>http://localhost:11434/v1</code>，密钥留空。</p>
+          <p class="task-hint">后端在跑的话，配置会存到项目根目录的 <code>.env</code>（api key 也在里面），所有浏览器共用这一份。</p>
+          <details class="task-details">
+            <summary>自定义接口</summary>
+            <p class="task-hint">请求体 <code>{ prompt, today, categories, tasks }</code>，返回 <code>{ tasks: [...] }</code> 或 <code>{ reply }</code>。</p>
+            <label class="task-field">
+              <span>自定义接口地址</span>
+              <input class="task-input" type="url" id="agent-endpoint" placeholder="留空就不用">
+            </label>
+          </details>
+        </div>
+        <p class="task-agent-status" id="agent-status" role="status"></p>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <span class="footer-mascot" aria-hidden="true"><img src="assets/images/mascot/spin.webp" alt="" width="160" height="160" loading="lazy" decoding="async"></span>
+      <span>© spasre</span>
+    </footer>
+  </div>
+  <script src="assets/js/site.js"></script>
+  <script src="assets/js/interest-lib.js"></script>
+  <script src="assets/js/tasks.js"></script>
+  <script src="assets/js/settings.js"></script>
+  <script src="assets/js/backend.js"></script>
+  <script src="assets/js/onboard.js"></script>
+</body>
+</html>

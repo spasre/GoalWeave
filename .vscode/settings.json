@@ -1,0 +1,5 @@
+{
+  // 同一个工作区如果是以 task_board 为根打开的，也用这份设置（见上一级目录的说明）。
+  "python.envFile": "${workspaceFolder}/.vscode/no-env-file",
+  "python.terminal.useEnvFile": false
+}

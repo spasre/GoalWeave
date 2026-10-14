@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <script>
+    try {
+      const root = document.documentElement;
+      const savedTheme = localStorage.getItem("spasre-theme");
+      if (savedTheme === "light" || savedTheme === "dark") {
+        root.dataset.theme = savedTheme;
+        document.querySelector('meta[name="theme-color"]').content =
+          savedTheme === "dark" ? "#121620" : "#f6f7fb";
+      }
+      // 密度 / 字号也先落好，免得刷新时闪一下
+      const look = JSON.parse(localStorage.getItem("spasre-look") || "null") || {};
+      if (look.density === "compact") root.dataset.density = "compact";
+      if (look.font === "small" || look.font === "large") root.dataset.font = look.font;
+    } catch (error) {
+      console.warn("Unable to read the saved appearance preferences.", error);
+    }
+  </script>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <meta name="description" content="任务板：记录任务、设置分类与紧急程度，点小狗表示完成。">
+  <title>任务 — 任务板</title>
+</head>
+<body>
+  <canvas id="petals" aria-hidden="true"></canvas>
+  <div class="page">
+    <header class="site-header">
+      <a class="wordmark" href="index.html" aria-label="任务板，返回首页">
+        <span class="mark" aria-hidden="true">s</span>
+        <span>任务板</span>
+      </a>
+      <div class="header-tools">
+        <nav class="nav" aria-label="主导航">
+          <a href="index.html">首页</a>
+          <a href="tasks.html" aria-current="page">任务</a>
+          <a href="goals.html">目标</a>
+          <a href="settings.html">设置</a>
+        </nav>
+        <div class="header-actions">
+          <button class="theme-toggle" type="button" aria-label="切换夜间模式" aria-pressed="false" title="切换夜间模式">
+            <svg class="auto-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4Z" fill="currentColor"/>
+            </svg>
+            <svg class="moon-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">              <path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9 8.6 8.6 0 1 0 20.1 15.2Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="m17.5 4 .5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5.5-1.5Z" fill="currentColor"/>
+            </svg>
+            <svg class="sun-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" hidden>
+              <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+    <main id="top">
+      <section class="page-bar">
+        <h1>任务板</h1>
+      </section>
+
+      <section class="section" id="task-board" aria-label="任务板">
+        <div class="task-toolbar">
+          <div class="task-tabs" id="task-view" role="tablist" aria-label="视图"></div>
+          <div class="task-filters">
+            <div class="task-tabs" id="task-scope" role="group" aria-label="时间范围"></div>
+            <select class="task-select" id="task-filter-category" aria-label="按分类筛选"></select>
+            <select class="task-select" id="task-filter-urgency" aria-label="按紧急程度筛选">
+              <option value="all">全部紧急度</option>
+              <option value="urgent">紧急</option>
+              <option value="high">重要</option>
+              <option value="normal">普通</option>
+              <option value="low">不急</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="task-active-panel">
+          <div id="task-groups"></div>
+        </div>
+
+        <div id="task-trash-panel" hidden>
+          <div class="task-trash-head">
+            <p class="task-hint" id="task-trash-summary"></p>
+            <button class="task-action task-action-danger" type="button" id="task-trash-clear">清空回收站</button>
+          </div>
+          <ul class="task-list" id="task-trash-list"></ul>
+        </div>
+
+        <section class="task-panel-block" aria-labelledby="task-agent-title">
+          <h2 class="task-panel-title" id="task-agent-title">助手</h2>
+          <div class="chat-box" id="agent-history" role="log" aria-label="聊天记录"></div>
+          <div class="task-panel-grid">
+            <label class="task-field">
+              <span>想让助手做什么</span>
+              <textarea class="task-textarea" id="agent-prompt" rows="2" placeholder="例如：帮我规划这周 —— 复习 IR；周三整理周报；今天把周报写完"></textarea>
+            </label>
+            <div class="task-actions-cell">
+              <button class="task-submit" type="button" id="agent-run">交给助手</button>
+              <button class="task-action" type="button" data-action="clear-chat">清空</button>
+            </div>
+          </div>
+          <p class="task-agent-status" id="agent-status" role="status"></p>
+        </section>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <span class="footer-mascot" aria-hidden="true"><img src="assets/images/mascot/spin.webp" alt="" width="160" height="160" loading="lazy" decoding="async"></span>
+      <span>© spasre</span>
+    </footer>
+  </div>
+  <button class="fab" type="button" id="fab-new-task" aria-label="新建任务" title="新建任务">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="sheet" id="task-sheet" hidden>
+    <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="task-sheet-title">
+      <div class="sheet-head">
+        <h2 class="sheet-title" id="task-sheet-title">新建任务</h2>
+        <button class="sheet-close" type="button" data-sheet-close="task-sheet" aria-label="关闭">✕</button>
+      </div>
+      <form class="task-form sheet-form" id="task-add-form" autocomplete="off">
+        <label class="task-field task-field-wide">
+          <span>任务</span>
+          <input class="task-input" type="text" name="title" placeholder="要做什么？" required>
+        </label>
+        <label class="task-field">
+          <span>分类</span>
+          <select class="task-select" name="category" id="task-category"></select>
+        </label>
+        <label class="task-field" id="task-category-new-field" hidden>
+          <span>新分类</span>
+          <input class="task-input" type="text" name="categoryNew" id="task-category-new" placeholder="新分类名">
+        </label>
+        <label class="task-field">
+          <span>紧急程度</span>
+          <select class="task-select" name="urgency">
+            <option value="urgent">紧急</option>
+            <option value="high">重要</option>
+            <option value="normal" selected>普通</option>
+            <option value="low">不急</option>
+          </select>
+        </label>
+        <label class="task-field">
+          <span>日期</span>
+          <input class="task-input" type="date" name="date">
+        </label>
+        <div class="task-actions-cell">
+          <button class="task-submit" type="submit">添加任务</button>
+          <button class="task-cancel" type="button" id="task-add-cancel" hidden>取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <script src="assets/js/site.js"></script>
+  <script src="assets/js/interest-lib.js"></script>
+  <script src="assets/js/tasks.js"></script>
+  <script src="assets/js/backend.js"></script>
+  <script src="assets/js/onboard.js"></script>
+</body>
+</html>
