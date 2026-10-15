@@ -1484,8 +1484,7 @@ html { overflow-x: clip; }
   line-height: 1.85;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 42vh;
-  overflow: auto;
+  /* 整份计划要能看完，别再截高度（本来就在折叠块里，想看的人自己点开） */
 }
 
 .goal-outline-copy { font-size: 12px; }
@@ -2305,6 +2304,37 @@ html { overflow-x: clip; }
 .sched-undo .sched-warn-text { color: var(--soft-ink); }
 
 .sched-chip.is-task { border-style: dashed; }
+
+/* ---------- 待安排：还没排进日程表的知识点 / 任务 ---------- */
+.sched-tray {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+}
+
+.sched-tray[hidden] { display: none; }
+
+.sched-tray-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+
+.sched-tray-title { color: var(--soft-ink); font-size: 13px; }
+
+.sched-tray-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 这一排里的块不再撑满格子，按内容宽 */
+.sched-chip.is-tray {
+  width: auto;
+  max-width: 240px;
+  padding: 5px 9px;
+  cursor: grab;
+}
+
+.sched-chip.is-tray .sched-chip-title { -webkit-line-clamp: 1; }
+
+.sched-chip.is-tray .sched-time { color: var(--muted); }
 /* ---------- 外观：密度 / 字号（设置页的「外观」三档） ---------- */
 
 /* 紧凑：主要容器的内边距、列表间距、日程表格子高度一起收 */

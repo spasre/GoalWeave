@@ -1562,10 +1562,62 @@
     });
   }
 
+  // 待安排：还没排进日程表的知识点和任务。列在这儿就能直接拖到格子上（或点一下在下面挑时间），
+  // 「改了计划但日程表没动」的落差也在这儿看得见。
+  function renderScheduleTray() {
+    const box = document.getElementById("sched-tray");
+    if (!box) return;
+    const nodes = [];
+    api.goals().forEach((goal) => {
+      (goal.nodes || []).forEach((node) => {
+        if (node.done) return;
+        if (node.date && node.slot && api.segment(node.slot)) return;
+        nodes.push({ goal: goal, node: node });
+      });
+    });
+    const tasks = api.list().filter((task) => !task.slot && !(task.goalId && task.nodeId));
+    const total = nodes.length + tasks.length;
+    box.hidden = total === 0;
+    box.replaceChildren();
+    if (box.hidden) return;
+
+    const head = el("div", "sched-tray-head");
+    head.append(el("strong", "sched-tray-title", "待安排 " + total));
+    head.append(el("span", "task-hint", "拖到空白的格子上，或者点一下在下面挑时间。"));
+    box.append(head);
+
+    const list = el("div", "sched-tray-list");
+    nodes.forEach((entry) => {
+      const chip = el("button", "sched-chip is-tray");
+      chip.type = "button";
+      chip.dataset.action = "sched-pick";
+      chip.dataset.id = entry.goal.id;
+      chip.dataset.node = entry.node.id;
+      chip.draggable = true;
+      chip.title = "【" + entry.goal.title + "】" + entry.node.title + "：还没排时间，拖到格子上或点一下挑时间";
+      chip.append(el("span", "sched-chip-title", entry.node.title));
+      chip.append(el("span", "sched-time", "未排期"));
+      list.append(chip);
+    });
+    tasks.forEach((task) => {
+      const chip = el("button", "sched-chip is-tray is-task");
+      chip.type = "button";
+      chip.dataset.action = "sched-task";
+      chip.dataset.task = task.id;
+      chip.draggable = true;
+      chip.title = task.title + "：还没排时间，拖到格子上或点一下挑时间";
+      chip.append(el("span", "sched-chip-title", task.title));
+      chip.append(el("span", "sched-time", "未排期"));
+      list.append(chip);
+    });
+    box.append(list);
+  }
+
   function renderSchedule() {
     renderScheduleTable();
     renderScheduleEdit();
     renderScheduleUndo();
+    renderScheduleTray();
   }
 
   // 时间段的问题一律挂在日程表顶部（跟上一段叠了、时间没填完、只剩一段），
@@ -1604,7 +1656,8 @@
     const wrap = document.getElementById("sched-wrap");
     if (!wrap) return;
     renderScheduleWarn();
-    wireScheduleDrag(wrap);
+    // 拖拽挂在日程表这块的外层：待安排那一排（在 #sched-wrap 外面）也能拖进来
+    wireScheduleDrag(document.getElementById("goal-schedule") || wrap);
     startScheduleClock();
     if (!sched.weekStart) sched.weekStart = loadWeek() || weekStartOf(api.today());
     const today = api.today();
@@ -2648,7 +2701,11 @@
   ensureScheduled();
   renderGoals();
   renderSchedule();
-  document.addEventListener("spasre:change", ensureScheduled);
+  document.addEventListener("spasre:change", () => {
+    // 目标页改了东西（同步、勾完、编辑目标）这边立刻跟上，不用等轮询
+    ensureScheduled();
+    renderSchedule();
+  });
   document.addEventListener("spasre:backend", (event) => {
     if (event && event.detail && event.detail.online) ensureScheduled();
   });
