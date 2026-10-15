@@ -3114,7 +3114,16 @@
       // 去日程表页挑时间；已经排好的就定位到它所在的那一周 / 那一天
       const task = store.tasks.find((item) => item.id === id);
       planTask(id, !(task && task.slot));
-      window.location.href = "schedule.html?task=" + encodeURIComponent(id);
+      const url = "schedule.html?task=" + encodeURIComponent(id);
+      const go = () => {
+        window.location.href = url;
+      };
+      // 先推后端再跳，不然刚打的「加入日程表」标记还没发出去就被新页面那份旧数据盖掉
+      if (window.spasreTasks && typeof window.spasreTasks.flush === "function") {
+        Promise.resolve(window.spasreTasks.flush()).then(go, go);
+      } else {
+        go();
+      }
       return;
     }
 

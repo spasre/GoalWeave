@@ -39,6 +39,12 @@ NODE_H = 68
 PAD = 44
 ASCII_PX = 6.5
 WIDE_PX = 13.0
+# Archify 的「桌面可读性」这条：1440 宽的窗口里图占 930px，节点里最小的那行字投影下来
+# 不能低于 6px，反推画布宽度得 ≤ 1395px，超一两个像素也会被它打回。所以画布宽度按这个
+# 预算来配：先缩格子，格子缩到底还排不下就少排几列（一层太宽就折成几行）。
+CANVAS_W_BUDGET = 1395
+CELL_W_MIN = NODE_W + 8
+GAP_X_MIN = 16
 # 每层换一个组件类型，靠颜色把「第几步」区分开
 LEVEL_TYPES = ["frontend", "backend", "messagebus", "database", "cloud", "security", "external"]
 
@@ -163,6 +169,52 @@ def layer_of(nodes):
 def column_offset(count, width):
     """层内居中的列偏移，必须是整数：小数取整会让两个节点挤进同一个格子。"""
     return (width - count) // 2
+
+
+def max_columns():
+    """画布宽度预算下最多还能并排几个格子（按最小格子、最小间距算）。"""
+    room = CANVAS_W_BUDGET - PAD * 2 + GAP_X_MIN
+    return max(1, room // (CELL_W_MIN + GAP_X_MIN))
+
+
+def fit_geometry(columns):
+    """挑格子宽度与格间距：先尽量保住格子宽度，再拿剩下的空间补间距。"""
+    if columns <= 1:
+        return CELL_W, GAP_X
+    for cell_w in range(CELL_W, CELL_W_MIN - 1, -4):
+        room = CANVAS_W_BUDGET - PAD * 2 - columns * cell_w
+        gap = min(GAP_X, room // (columns - 1))
+        if gap >= GAP_X_MIN:
+            return cell_w, gap
+    return CELL_W_MIN, GAP_X_MIN
+
+
+def pack_slots(slots, columns):
+    """一层的知识点太多就折成几行：横着铺满画布会被 Archify 以「桌面可读性」打回。"""
+    limit = max_columns()
+    if columns <= limit:
+        return slots, columns, len({row for row, _ in slots.values()})
+    bands = {}
+    for ident, (row, column) in slots.items():
+        bands.setdefault(row, []).append((column, ident))
+    plan = []
+    width = 0
+    for depth in sorted(bands):
+        items = [ident for _, ident in sorted(bands[depth])]
+        chunks = -(-len(items) // limit)             # 这一层要折成几行（向上取整）
+        step = min(limit, -(-len(items) // chunks))  # 每行放几个：尽量匀，末行不落单
+        plan.append((items, step))
+        width = max(width, step)
+    grid = {}
+    row = 0
+    for items, step in plan:
+        for start in range(0, len(items), step):
+            chunk = items[start:start + step]
+            offset = column_offset(len(chunk), width)
+            for index, ident in enumerate(chunk):
+                grid[ident] = (row, index + offset)
+            row += 1
+    return grid, width, row
 
 
 def edge_crossings(positions, edges):
@@ -299,10 +351,12 @@ def build_candidate(title, nodes, options):
     rows, slots, columns, crossings = arrange(nodes)
     levels = levels_of(nodes)
     slots, columns, height = wrap_slots(rows, slots, columns)
+    slots, columns, height = pack_slots(slots, columns)
+    cell_w, gap_x = fit_geometry(columns)
     labels = [str(item) for item in (options.get("level_labels") or [])]
     subtitle = str(options.get("subtitle") or "").strip() or ("共 " + str(len(nodes)) + " 个知识点")
 
-    view_w = columns * CELL_W + (columns - 1) * GAP_X + PAD * 2
+    view_w = columns * cell_w + (columns - 1) * gap_x + PAD * 2
     view_h = height * CELL_H + max(height - 1, 0) * GAP_Y + PAD * 2
 
     # 图例本来是架构图那套词（前端 / 后端 / 消息总线），学习路线图里得换成自己的层名。
@@ -381,8 +435,8 @@ def build_candidate(title, nodes, options):
             "legend": {"mode": "hidden" if hide_legend else "auto", "entries": legend},
             "viewBox": [round(view_w, 1), round(view_h, 1)],
         },
-        "layout": {"mode": "grid", "cols": columns, "cellW": CELL_W, "cellH": CELL_H,
-                   "gapX": GAP_X, "gapY": GAP_Y, "origin": [PAD, PAD]},
+        "layout": {"mode": "grid", "cols": columns, "cellW": cell_w, "cellH": CELL_H,
+                   "gapX": gap_x, "gapY": GAP_Y, "origin": [PAD, PAD]},
         "components": components,
         "connections": connections,
         "cards": cards,

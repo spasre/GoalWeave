@@ -2271,6 +2271,20 @@ html { overflow-x: clip; }
 
 .goal-next-brief { flex: 1 1 100%; margin: 0; color: var(--soft-ink); font-size: 12px; }
 
+/* 图还没有的时候：卡片上留一句说明 + 一个「画一张路线图」 */
+.goal-diagram-stub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 12px 0 4px;
+  padding: 9px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.goal-hint { color: var(--muted); font-size: 12px; }
+
 .goal-outline-fold > summary {
   cursor: pointer;
   color: var(--soft-ink);

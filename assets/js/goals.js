@@ -609,10 +609,6 @@
 
   /* ---------- 节点与依赖：就地加删知识点、连断前置（边） ---------- */
 
-  function nodeSeed() {
-    return "n" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
-  }
-
   // 改知识点（节点）和前置（边）：保存后大纲、任务、学习路线图一起更新；
   // 已经排好的时间不动（sanitizeNodes 不认 slot/hours，所以按 id 收回来）。
   function openNodeEditor(goalId) {
@@ -639,11 +635,6 @@
     const status = el("p", "task-hint");
     const foot = el("div", "task-actions-cell");
     sheet.body.append(list, status, foot);
-
-    function titleOf(id) {
-      const node = draft.find((item) => item.id === id);
-      return node ? node.title : id;
-    }
 
     function render() {
       list.replaceChildren();
@@ -677,47 +668,7 @@
         });
         main.append(remove);
         row.append(main);
-
-        const deps = el("div", "node-edit-deps");
-        deps.append(el("span", "node-edit-label", "前置"));
-        if (node.deps.length === 0) deps.append(el("span", "node-hint", "没有（最先学这个）"));
-        node.deps.forEach((dep) => {
-          const chip = el("span", "node-dep-chip");
-          chip.append(el("span", null, titleOf(dep)));
-          const cut = el("button", "node-dep-cut", "✕");
-          cut.type = "button";
-          cut.title = "断掉这条边（不再要求先学它）";
-          cut.setAttribute("aria-label", "去掉前置 " + titleOf(dep));
-          cut.addEventListener("click", () => {
-            node.deps = node.deps.filter((item) => item !== dep);
-            render();
-          });
-          chip.append(cut);
-          deps.append(chip);
-        });
-
-        const options = draft.filter((item) => item.id !== node.id && node.deps.indexOf(item.id) < 0);
-        if (options.length > 0) {
-          const pick = document.createElement("select");
-          pick.className = "task-select node-dep-add";
-          const blank = document.createElement("option");
-          blank.value = "";
-          blank.textContent = "＋ 连一个前置…";
-          pick.append(blank);
-          options.forEach((item) => {
-            const option = document.createElement("option");
-            option.value = item.id;
-            option.textContent = item.title;
-            pick.append(option);
-          });
-          pick.addEventListener("change", () => {
-            if (!pick.value) return;
-            node.deps.push(pick.value);
-            render();
-          });
-          deps.append(pick);
-        }
-        row.append(deps);
+        row.append(depEditor(node, draft, render));
         list.append(row);
       });
     }
@@ -754,20 +705,8 @@
         node.deps = (node.deps || []).filter((dep) => ids.has(dep) && dep !== node.id);
       });
       const before = JSON.stringify(cleaned.map((node) => [node.title, node.deps]));
-      const safe = sanitizeNodes(cleaned);   // 顺手断掉绕圈的依赖、去掉指向不存在节点的边
-      // sanitizeNodes 不认 slot / hours：按 id 收回来，免得已经排好的时间被当成「没排过」
-      const keep = new Map(cleaned.map((node) => [node.id, node]));
-      const placed = new Set();
-      safe.forEach((node) => {
-        const old = keep.get(node.id);
-        if (!old) return;
-        node.slot = old.slot;
-        node.hours = old.hours;
-        if (old.date) node.date = old.date;
-        if (!node.brief && old.brief) node.brief = old.brief;
-        if ((!node.links || node.links.length === 0) && old.links) node.links = old.links;
-        if (node.date && node.slot) placed.add(node.id);
-      });
+      const safe = restorePlacement(sanitizeNodes(cleaned), cleaned);   // 顺手断掉绕圈的依赖、去掉指向不存在节点的边
+      const placed = new Set(safe.filter((node) => node.date && node.slot).map((node) => node.id));
       api.updateGoal(goal.id, { nodes: safe, outline: outlineText(goal.title, safe, metaOf(goal)) });
       api.syncGoalTasks(goal.id);
       renderGoals();
@@ -791,10 +730,10 @@
         return;
       }
       // 画不出来就把旧图撤掉（它跟现在的节点对不上），并给一个重试入口
-      api.updateGoal(id, { diagram: "" });
+      api.updateGoal(id, { diagram: "", diagramError: whyDrawFailed(drawing) });
       renderGoals();
       status.replaceChildren();
-      status.append(el("span", null, "存好了，但路线图没重画成功：" + (drawing.error || "后端没在跑，或者 Archify 没过校验") + " "));
+      status.append(el("span", null, "存好了，但路线图没重画成功：" + whyDrawFailed(drawing) + "。"));
       const retry = el("button", "task-action", "再试一次");
       retry.type = "button";
       retry.addEventListener("click", () => redraw(id));
@@ -880,6 +819,7 @@
     if (next) card.append(goalNextBox(goal, next));
 
     if (goal.diagram) card.append(goalDiagramBox(goal, reusedBox));
+    else if (nodes.length > 0) card.append(goalDiagramStub(goal));
     card.append(goalOutline(goal.title, nodes, metaOf(goal)));
     if (goal.planNote) card.append(el("p", "goal-note", goal.planNote));
     return card;
@@ -966,6 +906,39 @@
     if (!opening) state.diagramClosed.push(goal.id);
     button.textContent = opening ? "收起路线图" : "展开路线图";
     button.setAttribute("aria-expanded", String(opening));
+  }
+
+  // 画图失败的原因统一在这儿收拾一下：去掉结尾的句号，免得拼出来两个「。。」
+  function whyDrawFailed(drawing) {
+    const why = String((drawing && drawing.error) || "后端没在跑，或者 Archify 没过校验");
+    return why.replace(/[。．.\s]+$/, "");
+  }
+
+  // 图没画出来（或是改过节点、旧图作废了）时卡片上留个入口，别只能靠向导里那一张
+  function goalDiagramStub(goal) {
+    const box = el("div", "goal-diagram-stub");
+    const note = el("span", "goal-hint", goal.diagramError ? "上回没画成：" + goal.diagramError : "这个目标还没有学习路线图。");
+    const draw = el("button", "task-action", "画一张路线图");
+    draw.type = "button";
+    draw.addEventListener("click", () => drawCardDiagram(goal.id, note, draw));
+    box.append(note, draw);
+    return box;
+  }
+
+  // 在卡片上现画一张：转圈期间把按钮禁用，省得点重了
+  async function drawCardDiagram(id, note, button) {
+    const goal = api.goal(id);
+    if (!goal) return;
+    if (button) button.disabled = true;
+    if (note) note.textContent = "正在画路线图…（后端要用一会儿）";
+    const drawing = await drawRoadmap(goal.title, goal.nodes || []);
+    if (drawing.ok) {
+      api.updateGoal(id, { diagram: drawing.url, diagramError: "" });
+      renderGoals();
+      return;
+    }
+    if (button) button.disabled = false;
+    if (note) note.textContent = "没画出来：" + whyDrawFailed(drawing) + "。再点一下试试。";
   }
 
   function renderGoals() {
@@ -1592,7 +1565,7 @@
       api.setSegments(rows);
       api.markPlanSetup();
       sheet.close();
-      window.location.href = "index.html";
+      goAfterFlush("schedule.html");
     });
     foot.append(later, goto, start);
     sheet.body.append(foot);
@@ -2760,7 +2733,7 @@
     const back = wzField("wz-back");
     if (back) back.hidden = wizard.step === 1;
     const next = wzField("wz-next");
-    if (next) next.textContent = wizard.step < 4 ? "下一步" : wizard.goalId ? "保存" : "创建";
+    if (next) next.textContent = wizard.step < 4 ? "下一步" : "完成，去日程表安排";
     if (wizard.step === 4) renderWizardSummary();
   }
 
@@ -2864,6 +2837,75 @@
     }, 400);
   }
 
+  /* ---------- 前置（图上的边）：节点编辑器和新目标向导共用这一份 ---------- */
+
+  function nodeSeed() {
+    return "n" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+  }
+
+  // sanitizeNodes 不认 slot / hours（只留 id/title/brief/deps/links/date/done）：
+  // 按 id 把排好的时间收回来，免得它们被当成「没排过」重新排一遍。
+  function restorePlacement(safe, source) {
+    const keep = new Map(source.map((node) => [node.id, node]));
+    safe.forEach((node) => {
+      const old = keep.get(node.id);
+      if (!old) return;
+      node.slot = old.slot;
+      node.hours = old.hours;
+      if (old.date) node.date = old.date;
+      if (!node.brief && old.brief) node.brief = old.brief;
+      if ((!node.links || node.links.length === 0) && old.links) node.links = old.links;
+    });
+    return safe;
+  }
+
+  // 一行「前置」：标签 + ✕ 断边 + 下拉连边。pool 是所有候选节点，onChange 让调用方去重画
+  function depEditor(node, pool, onChange) {
+    const box = el("div", "node-edit-deps");
+    box.append(el("span", "node-edit-label", "前置"));
+    node.deps = Array.isArray(node.deps) ? node.deps : [];
+    if (node.deps.length === 0) box.append(el("span", "node-hint", "没有（最先学这个）"));
+    node.deps.forEach((dep) => {
+      const target = pool.find((item) => item.id === dep);
+      const name = target ? target.title : dep;
+      const chip = el("span", "node-dep-chip");
+      chip.append(el("span", null, name));
+      const cut = el("button", "node-dep-cut", "✕");
+      cut.type = "button";
+      cut.title = "断掉这条边（不再要求先学它）";
+      cut.setAttribute("aria-label", "去掉前置 " + name);
+      cut.addEventListener("click", () => {
+        node.deps = node.deps.filter((item) => item !== dep);
+        onChange();
+      });
+      chip.append(cut);
+      box.append(chip);
+    });
+
+    const options = pool.filter((item) => item.id !== node.id && node.deps.indexOf(item.id) < 0);
+    if (options.length > 0) {
+      const pick = document.createElement("select");
+      pick.className = "task-select node-dep-add";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "＋ 连一个前置…";
+      pick.append(blank);
+      options.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = String(item.title || "").trim() || "(没名字)";
+        pick.append(option);
+      });
+      pick.addEventListener("change", () => {
+        if (!pick.value) return;
+        node.deps.push(pick.value);
+        onChange();
+      });
+      box.append(pick);
+    }
+    return box;
+  }
+
   function renderWizardNodes() {
     refreshWizardOutline();
 
@@ -2909,13 +2951,36 @@
       const remove = el("button", "task-action task-action-danger", "删");
       remove.type = "button";
       remove.addEventListener("click", () => {
+        const gone = node.id;
         wizard.nodes = wizard.nodes.filter((item) => item !== node);
+        wizard.nodes.forEach((item) => {
+          item.deps = (item.deps || []).filter((dep) => dep !== gone);
+        });
         renderWizardNodes();
         markDiagramStale();
       });
       row.append(remove);
+      // 前置（边）就在这一行下面，新建的时候就能连
+      row.append(depEditor(node, wizard.nodes, () => {
+        renderWizardNodes();
+        markDiagramStale();
+      }));
       list.append(row);
     });
+
+    // 生成的知识点不够、或者想自己加一个，都能在这儿动手
+    const addRow = el("li", "node-row node-row-add");
+    const add = el("button", "task-action", "＋ 添加知识点");
+    add.type = "button";
+    add.addEventListener("click", () => {
+      wizard.nodes.push({ id: nodeSeed(), title: "", brief: "", deps: [], links: [] });
+      renderWizardNodes();
+      markDiagramStale();
+      const inputs = list.querySelectorAll("input.task-input");
+      if (inputs.length > 0) inputs[inputs.length - 1].focus();
+    });
+    addRow.append(add);
+    list.append(addRow);
   }
 
   function renderWizardSummary() {
@@ -2934,31 +2999,19 @@
     if (!preview) return;
     preview.replaceChildren();
     if (units === 0) return;
-    const plan = planSchedule({
-      dry: true,
-      goal: {
-        id: "wizard",
-        title: wzValue("wz-title"),
-        startDate: start,
-        deadline: deadline,
-        weekly: weekly,
-        nodes: JSON.parse(JSON.stringify(wizard.nodes))
-      }
-    });
-    const list = el("ul", "sched-preview");
-    plan.details.slice(0, 10).forEach((item) => {
-      const row = el("li");
-      row.append(el("span", "sched-when", String(item.date).slice(5) + " " + api.slotTime(item.slot, item.hours)));
-      row.append(el("span", null, item.title));
-      list.append(row);
-    });
-    preview.append(list);
-    if (plan.details.length > 10) {
-      preview.append(el("p", "task-hint", "还有 " + (plan.details.length - 10) + " 条排在后面的日子。"));
-    }
-    if (plan.missed > 0) {
-      preview.append(el("p", "task-hint", "有 " + plan.missed + " 个知识点这几天没空位了。"));
-    }
+    // 具体排到哪几天不在这儿列了：去日程表看，还能顺手拖时间、整体重排
+    preview.append(
+      el("p", "task-hint", "具体排到哪几天、几点到几点，到日程表上看 —— 点「完成，去日程表安排」就过去。还没排期的知识点会待在日程表顶上的「待安排」里，拖进格子就行；想整体重排就按那边的「重新规划」。")
+    );
+  }
+
+  // 跳走之前先把这次改动推给后端：不然新页面打开的又是后端那份旧的，等于白改
+  function goAfterFlush(url) {
+    const go = () => {
+      window.location.href = url;
+    };
+    if (typeof api.flush === "function") Promise.resolve(api.flush()).then(go, go);
+    else go();
   }
 
   function finishWizard() {
@@ -2982,15 +3035,22 @@
       setStatus("没保存成功。");
       return;
     }
+    const nodes = restorePlacement(sanitizeNodes(wizard.nodes), wizard.nodes);   // 手加的知识点也过一遍：去悬空依赖、断环
     api.updateGoal(goal.id, {
-      nodes: wizard.nodes,
+      nodes: nodes,
       planSource: wizard.source,
       planNote: wizard.note,
-      diagram: wizard.diagram
+      diagram: wizard.diagram,
+      outline: outlineText(goal.title, nodes, metaOf(goal))
     });
-    // 先不排期：什么时候进日程表，由卡片右上角那个「同步」说了算
     closeWizard();
-    setStatus("「" + goal.title + "」：" + wizard.nodes.length + " 个知识点。点这张卡右上角的「同步」，把它们排进日程表。");
+    // 还没排期的直接去日程表：在那儿拖时间，或者按「重新规划」整体排一遍
+    const pending = nodes.filter((node) => !node.date || !node.slot).length;
+    if (pending > 0) {
+      goAfterFlush("schedule.html");
+      return;
+    }
+    setStatus("「" + goal.title + "」：" + nodes.length + " 个知识点，都排好了。");
   }
 
   // 把一张画好的学习路线图摆进向导（不重新生成）
