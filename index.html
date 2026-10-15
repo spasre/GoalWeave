@@ -69,6 +69,10 @@
       <section class="section" id="goal-schedule" aria-label="日程表（这一周）">
         <div class="sched-head">
           <h2 class="section-title accent-blue">日程表</h2>
+          <div class="sched-header-tools">
+            <span class="task-hint">这一周的概览 —— 拖时间、改时段、重新规划都在日程表页</span>
+            <a class="section-link" href="schedule.html">打开日程表 →</a>
+          </div>
           <div class="sched-nav">
             <button class="task-action" type="button" data-action="sched-prev">上一周</button>
             <span id="sched-range"></span>
@@ -78,10 +82,6 @@
         </div>
         <p class="sched-warn" id="sched-warn" role="status" hidden></p>
         <div class="sched-wrap" id="sched-wrap"></div>
-        <div class="articles-heading sched-more">
-          <span class="task-hint">这里只是这一周的概览 —— 拖时间、改时段、重新规划都在日程表页。</span>
-          <a class="section-link" href="schedule.html">打开日程表 →</a>
-        </div>
       </section>
 
       <section class="section" aria-labelledby="home-today-title">
@@ -95,7 +95,7 @@
       <section class="section" aria-labelledby="home-daily-title">
         <div class="articles-heading">
           <h2 class="section-title accent-violet" id="home-daily-title">每日推荐</h2>
-          <a class="section-link" href="tasks.html#task-settings-title">兴趣点 →</a>
+          <a class="section-link" href="settings.html#settings-interests">兴趣点 →</a>
         </div>
         <div id="home-daily"></div>
       </section>

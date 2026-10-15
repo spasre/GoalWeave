@@ -1147,7 +1147,7 @@
         button.dataset.date = date;
         button.dataset.slot = seg.key;
       }
-      button.title = isPast ? "这段时间已经过去了" : isBusy ? "恢复成空闲" : "把每周这个时间的这一段都设为非空闲";
+      button.title = isPast ? "这段时间已经过去了" : isBusy ? (preview ? "非空闲" : "恢复成空闲") : (preview ? "空着" : "把每周这个时间的这一段都设为非空闲");
       button.setAttribute("aria-label", button.title);
       if (isPast) button.textContent = "";
       cell.append(button);
@@ -1165,7 +1165,9 @@
         chip.dataset.action = isPast ? "" : "sched-task";
         chip.dataset.task = task.id;
         chip.draggable = !isPast;
-        chip.title = task.title + "：" + api.slotTime(seg.key, hours) + " · " + hours + " 小时 —— 点一下改时间，也可以拖到别的空格子";
+        chip.title = preview
+          ? task.title + "：" + api.slotTime(seg.key, hours) + " · " + hours + " 小时"
+          : task.title + "：" + api.slotTime(seg.key, hours) + " · " + hours + " 小时 —— 点一下改时间，也可以拖到别的空格子";
         chip.style.setProperty("--sched-rgb", entry.rgb);
         chip.append(el("span", "sched-chip-title", task.title));
         chip.append(el("span", "sched-time", (isPast ? "已过去 · " : "") + api.slotTime(seg.key, hours)));
@@ -1192,9 +1194,9 @@
         button.dataset.action = "sched-overdue";
         button.dataset.id = entry.goal.id;
         button.dataset.node = entry.node.id;
-        button.title = "「" + entry.node.title + "」过期没做：点一下排到后面的空位里（会排在它后面的任务前面）";
+        button.title = "「" + entry.node.title + "」过期没做" + (preview ? "" : "：点一下排到后面的空位里（会排在它后面的任务前面）");
         button.append(el("span", "sched-chip-title", entry.node.title));
-        button.append(el("span", "sched-time", "过期没做 · 点这里重排"));
+        button.append(el("span", "sched-time", preview ? "过期没做" : "过期没做 · 点这里重排"));
         cell.append(button);
         return;
       }
@@ -1204,10 +1206,13 @@
       chip.dataset.id = entry.goal.id;
       chip.dataset.node = entry.node.id;
       chip.draggable = !blocked;
-      chip.title = blocked
-        ? "「" + entry.node.title + "」的前置还没做：先把前面过期那个重排一下"
-        : "【" + entry.goal.title + "】" + entry.node.title + "：" + api.slotTime(seg.key, entry.node.hours) +
-          " · " + api.slotHours(seg.key, entry.node.hours) + " 小时 —— 拖到空闲的格子，或点一下改时间";
+      chip.title = preview
+        ? "【" + entry.goal.title + "】" + entry.node.title + "：" + api.slotTime(seg.key, entry.node.hours) +
+          " · " + api.slotHours(seg.key, entry.node.hours) + " 小时" + (blocked ? "（前置还没做完）" : "")
+        : blocked
+          ? "「" + entry.node.title + "」的前置还没做：先把前面过期那个重排一下"
+          : "【" + entry.goal.title + "】" + entry.node.title + "：" + api.slotTime(seg.key, entry.node.hours) +
+            " · " + api.slotHours(seg.key, entry.node.hours) + " 小时 —— 拖到空闲的格子，或点一下改时间";
       chip.style.setProperty("--sched-rgb", entry.rgb);
       const hours = api.slotHours(seg.key, entry.node.hours);
       chip.append(el("span", "sched-chip-title", entry.node.title));

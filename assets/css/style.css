@@ -1929,7 +1929,14 @@ html { overflow-x: clip; }
 
 /* ---------- 日程表：一周 × 一天几段 ---------- */
 
-.sched-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sched-head { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 8px 12px; }
+
+/* 右上角：这一页只是概览，编辑在日程表页 */
+.sched-header-tools { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: 4px 10px; }
+
+.sched-header-tools .task-hint { margin: 0; }
+
+.sched-head .sched-nav { grid-column: 1 / -1; }
 
 .sched-nav { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
@@ -2382,8 +2389,6 @@ html { overflow-x: clip; }
 .sched-views .task-action + .task-action { border-left: 1px solid var(--line); }
 
 .sched-views .task-action.is-on { background: var(--brand); border-color: var(--brand); color: var(--paper); }
-
-.sched-more { margin-top: 10px; }
 
 /* ---------- 日视图：24 小时一条时间轴 ---------- */
 .day-grid { display: flex; gap: 10px; margin-top: 12px; padding: 6px 0; overflow-y: auto; max-height: 74vh; }
