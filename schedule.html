@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <script>
+    try {
+      const root = document.documentElement;
+      const savedTheme = localStorage.getItem("spasre-theme");
+      if (savedTheme === "light" || savedTheme === "dark") {
+        root.dataset.theme = savedTheme;
+        document.querySelector('meta[name="theme-color"]').content =
+          savedTheme === "dark" ? "#121620" : "#f6f7fb";
+      }
+      // 密度 / 字号也先落好，免得刷新时闪一下
+      const look = JSON.parse(localStorage.getItem("spasre-look") || "null") || {};
+      if (look.density === "compact") root.dataset.density = "compact";
+      if (look.font === "small" || look.font === "large") root.dataset.font = look.font;
+    } catch (error) {
+      console.warn("Unable to read the saved appearance preferences.", error);
+    }
+  </script>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <meta name="description" content="日程表：周 / 日 / 月三种看法，知识点和任务都在这儿安排时间。">
+  <title>日程表 — 任务板</title>
+</head>
+<body>
+  <canvas id="petals" aria-hidden="true"></canvas>
+  <div class="page">
+    <header class="site-header">
+      <a class="wordmark" href="index.html" aria-label="任务板，返回首页">
+        <span class="mark" aria-hidden="true">s</span>
+        <span>任务板</span>
+      </a>
+      <div class="header-tools">
+        <nav class="nav" aria-label="主导航">
+          <a href="index.html">首页</a>
+          <a href="schedule.html" aria-current="page">日程表</a>
+          <a href="tasks.html">任务</a>
+          <a href="goals.html">目标</a>
+          <a href="settings.html">设置</a>
+        </nav>
+        <div class="header-actions">
+          <button class="theme-toggle" type="button" aria-label="切换夜间模式" aria-pressed="false" title="切换夜间模式">
+            <svg class="auto-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 3.8a8.2 8.2 0 0 1 0 16.4Z" fill="currentColor"/>
+            </svg>
+            <svg class="moon-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">              <path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9 8.6 8.6 0 1 0 20.1 15.2Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="m17.5 4 .5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5.5-1.5Z" fill="currentColor"/>
+            </svg>
+            <svg class="sun-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+    <main id="top">
+      <section class="page-bar">
+        <h1>日程表</h1>
+      </section>
+
+      <section class="section" id="goal-schedule" data-sched-page="1" aria-label="日程表">
+        <div class="sched-head">
+          <div class="sched-nav">
+            <button class="task-action" type="button" data-action="sched-prev" id="sched-prev-btn">上一周</button>
+            <span id="sched-range"></span>
+            <button class="task-action" type="button" data-action="sched-next" id="sched-next-btn">下一周</button>
+            <button class="task-action" type="button" data-action="sched-today" id="sched-today-btn">本周</button>
+            <div class="sched-views" role="group" aria-label="显示方式">
+              <button class="task-action sched-view-btn is-on" type="button" data-action="sched-view" data-view="week">周</button>
+              <button class="task-action sched-view-btn" type="button" data-action="sched-view" data-view="day">日</button>
+              <button class="task-action sched-view-btn" type="button" data-action="sched-view" data-view="month">月</button>
+            </div>
+            <button class="task-action" type="button" data-action="sched-replan" title="按现在的空闲时间，把没做完的知识点重新排一遍（可以撤销）">重新规划</button>
+            <button class="task-action" type="button" data-action="segment-add" title="加一个时间段" aria-label="添加时间段">添加时间段</button>
+          </div>
+        </div>
+        <p class="sched-warn" id="sched-warn" role="status" hidden></p>
+        <p class="sched-undo" id="sched-undo" role="status" hidden></p>
+        <div class="sched-tray" id="sched-tray" role="group" aria-label="待安排" hidden></div>
+        <div class="sched-wrap" id="sched-wrap"></div>
+        <div class="sched-day" id="sched-day" hidden></div>
+        <div class="sched-month" id="sched-month" hidden></div>
+        <p class="task-hint" id="sched-status" role="status"></p>
+        <div class="sched-edit" id="sched-edit" hidden></div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span class="footer-mascot" aria-hidden="true"><img src="assets/images/mascot/spin.webp" alt="" width="160" height="160" loading="lazy" decoding="async"></span>
+      <span>© spasre</span>
+    </footer>
+  </div>
+  <script src="assets/js/site.js"></script>
+  <script src="assets/js/interest-lib.js"></script>
+  <script src="assets/js/tasks.js"></script>
+  <script src="assets/js/goals.js"></script>
+  <script src="assets/js/backend.js"></script>
+  <script src="assets/js/onboard.js"></script>
+</body>
+</html>

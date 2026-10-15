@@ -39,6 +39,7 @@
       <div class="header-tools">
         <nav class="nav" aria-label="主导航">
           <a href="index.html" aria-current="page">首页</a>
+          <a href="schedule.html">日程表</a>
           <a href="tasks.html">任务</a>
           <a href="goals.html">目标</a>
           <a href="settings.html">设置</a>
@@ -65,7 +66,7 @@
         <h1>首页</h1>
       </section>
 
-      <section class="section" id="goal-schedule" aria-label="日程表">
+      <section class="section" id="goal-schedule" aria-label="日程表（这一周）">
         <div class="sched-head">
           <h2 class="section-title accent-blue">日程表</h2>
           <div class="sched-nav">
@@ -73,16 +74,14 @@
             <span id="sched-range"></span>
             <button class="task-action" type="button" data-action="sched-next">下一周</button>
             <button class="task-action" type="button" data-action="sched-today">本周</button>
-            <button class="task-action" type="button" data-action="sched-replan" title="按现在的空闲时间，把没做完的知识点重新排一遍（可以撤销）">重新规划</button>
-            <button class="task-action" type="button" data-action="segment-add" title="加一个时间段" aria-label="添加时间段">添加时间段</button>
           </div>
         </div>
         <p class="sched-warn" id="sched-warn" role="status" hidden></p>
-        <p class="sched-undo" id="sched-undo" role="status" hidden></p>
-        <div class="sched-tray" id="sched-tray" role="group" aria-label="待安排" hidden></div>
         <div class="sched-wrap" id="sched-wrap"></div>
-        <p class="task-hint" id="sched-status" role="status"></p>
-        <div class="sched-edit" id="sched-edit" hidden></div>
+        <div class="articles-heading sched-more">
+          <span class="task-hint">这里只是这一周的概览 —— 拖时间、改时段、重新规划都在日程表页。</span>
+          <a class="section-link" href="schedule.html">打开日程表 →</a>
+        </div>
       </section>
 
       <section class="section" aria-labelledby="home-today-title">

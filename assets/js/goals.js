@@ -984,7 +984,14 @@
 
   /* ---------- 日程表：页面上那张网格 ---------- */
 
-  const sched = { weekStart: "", pick: null, drag: null, seg: "", task: "", note: "", draft: null, warn: "" };
+  const sched = {
+    weekStart: "", pick: null, drag: null, seg: "", task: "", note: "", draft: null, warn: "",
+    view: "week",   // week | day | month
+    day: "",
+    month: "",
+    missing: "",    // 从别的页跳过来要找的那条任务
+    preview: false
+  };
   // 多个目标共用一个网格，按顺序给每个目标一个颜色
   const SCHED_RGB = ["84, 118, 172", "231, 155, 176", "72, 143, 138", "126, 96, 168", "240, 195, 154"];
 
@@ -1113,23 +1120,33 @@
     return map;
   }
 
-  function scheduleCell(date, seg, entries, isBusy, isPast, isClash) {
-    const cell = el("div", "sched-cell");
+  function scheduleCell(date, seg, entries, isBusy, isPast, isClash, inDay) {
+    const preview = Boolean(sched.preview);
+    const cell = el("div", "sched-cell" + (inDay ? " is-inline" : ""));
     if (isClash) cell.classList.add("is-clash");
     if (isPast) cell.classList.add("is-past");
     else if (entries.length === 0 && isBusy) cell.classList.add("is-busy");
     if (!isPast && entries.length === 0 && !isBusy) cell.classList.add("is-free");
     cell.dataset.date = date;
     cell.dataset.slot = seg.key;
-    // 一格里有几个任务：任务块里标题能显示几行，就按它来（否则整块挤成一团）
     cell.dataset.chips = String(Math.min(entries.length, 3));
+    // 首页那份预览：块儿只是看看，不拖也不点
+    const staticChip = (chip) => {
+      if (!preview) return chip;
+      delete chip.dataset.action;
+      chip.draggable = false;
+      chip.classList.add("is-static");
+      return chip;
+    };
     if (entries.length === 0) {
       const button = el("button", "sched-empty", !isPast && isBusy ? "非空闲" : "");
       button.type = "button";
-      button.dataset.action = "sched-busy";
-      button.dataset.date = date;
-      button.dataset.slot = seg.key;
-      button.disabled = isPast;
+      button.disabled = isPast || preview;
+      if (!preview) {
+        button.dataset.action = "sched-busy";
+        button.dataset.date = date;
+        button.dataset.slot = seg.key;
+      }
       button.title = isPast ? "这段时间已经过去了" : isBusy ? "恢复成空闲" : "把每周这个时间的这一段都设为非空闲";
       button.setAttribute("aria-label", button.title);
       if (isPast) button.textContent = "";
@@ -1152,7 +1169,8 @@
         chip.style.setProperty("--sched-rgb", entry.rgb);
         chip.append(el("span", "sched-chip-title", task.title));
         chip.append(el("span", "sched-time", (isPast ? "已过去 · " : "") + api.slotTime(seg.key, hours)));
-        cell.append(chip);
+        if (sched.task === task.id) chip.classList.add("is-picked");
+        cell.append(staticChip(chip));
         return;
       }
       const key = api.nodeKey(entry.goal.id, entry.node.id);
@@ -1198,7 +1216,7 @@
       if (sched.pick && sched.pick.goalId === entry.goal.id && sched.pick.nodeId === entry.node.id) {
         chip.classList.add("is-picked");
       }
-      cell.append(chip);
+      cell.append(staticChip(chip));
     });
     return cell;
   }
@@ -1218,13 +1236,26 @@
     box.replaceChildren();
     box.append(el("span", "sched-edit-title", task.title));
 
+    // 改完立刻写回；这一格放不下就退回并说明还剩多少
+    function changeTaskSlot(patch) {
+      const next = {
+        date: patch.date !== undefined ? patch.date : task.date,
+        slot: patch.slot !== undefined ? patch.slot : task.slot,
+        hours: patch.hours !== undefined ? patch.hours : task.hours
+      };
+      if (!api.placeTask(task.id, next)) {
+        setSchedStatus(cellFullNote(next.date, next.slot, { taskId: task.id }));
+        renderSchedule();
+      }
+    }
+
     const dateField = el("label", "task-field");
     dateField.append(el("span", null, "日期"));
     const dateInput = document.createElement("input");
     dateInput.className = "task-input";
     dateInput.type = "date";
     dateInput.value = task.date || api.today();
-    dateInput.addEventListener("change", () => api.placeTask(task.id, { date: dateInput.value, slot: task.slot, hours: task.hours }));
+    dateInput.addEventListener("change", () => changeTaskSlot({ date: dateInput.value }));
     dateField.append(dateInput);
     box.append(dateField);
 
@@ -1239,7 +1270,7 @@
       slotSelect.append(option);
     });
     slotSelect.value = task.slot;
-    slotSelect.addEventListener("change", () => api.placeTask(task.id, { date: task.date, slot: slotSelect.value, hours: task.hours }));
+    slotSelect.addEventListener("change", () => changeTaskSlot({ slot: slotSelect.value }));
     slotField.append(slotSelect);
     box.append(slotField);
 
@@ -1252,7 +1283,7 @@
     hoursInput.step = "0.5";
     hoursInput.max = String(api.segmentMinutes(task.slot) / 60);
     hoursInput.value = String(api.slotHours(task.slot, task.hours));
-    hoursInput.addEventListener("change", () => api.placeTask(task.id, { date: task.date, slot: task.slot, hours: Number(hoursInput.value) }));
+    hoursInput.addEventListener("change", () => changeTaskSlot({ hours: Number(hoursInput.value) }));
     hoursField.append(hoursInput);
     box.append(hoursField);
 
@@ -1488,10 +1519,49 @@
 
   /* ---------- 拖拽改期：把任务块拖到空闲的格子上 ---------- */
 
-  // 只有「空着、且没被划成非空闲」的格子接得住拖过来的任务
+  // 一格里的总时长不能超过这一段的长度：超了就不动，并说清还剩多少
+  function cellFits(date, slot, hours, exclude) {
+    if (!api.segment(slot)) return false;
+    const room = api.segmentMinutes(slot) / 60;
+    return api.usedHours(date, slot, exclude || {}) + (Number(hours) || 0) <= room + 0.001;
+  }
+
+  function leftHours(date, slot, exclude) {
+    const room = api.segmentMinutes(slot) / 60;
+    return Math.max(0, Math.round((room - api.usedHours(date, slot, exclude || {})) * 2) / 2);
+  }
+
+  function cellFullNote(date, slot, exclude) {
+    const seg = api.segment(slot);
+    return "这一格（" + (seg ? seg.start + "–" + seg.end : slot) + "）只剩 " + leftHours(date, slot, exclude) +
+      " 小时，放不下了 —— 这次改动没生效。要腾地方就把这一格里别的块挪走、或者把时间段改长一点。";
+  }
+
+  function dragInfo() {
+    const drag = sched.drag;
+    if (!drag) return null;
+    if (drag.taskId) {
+      const task = api.list().find((item) => item.id === drag.taskId);
+      if (!task) return null;
+      return { hours: Number(task.hours) || 1, exclude: { taskId: task.id } };
+    }
+    const goal = api.goal(drag.goalId);
+    const node = goal ? (goal.nodes || []).find((item) => item.id === drag.nodeId) : null;
+    if (!node) return null;
+    return { hours: Number(node.hours) || 1, exclude: { goalId: drag.goalId, nodeId: drag.nodeId } };
+  }
+
+  // 能接住拖拽的格子：没过去、不是非空闲、而且放下之后总时长还不超
   function dropCellOf(target) {
     if (!sched.drag || !target || typeof target.closest !== "function") return null;
-    return target.closest(".sched-cell.is-free");
+    const cell = target.closest(".sched-cell");
+    if (!cell || cell.classList.contains("is-past") || cell.classList.contains("is-busy")) return null;
+    const slot = cell.dataset.slot;
+    const info = dragInfo();
+    if (!info) return null;
+    const limit = Math.round((api.segmentMinutes(slot) / 60) * 2) / 2;
+    const hours = Math.max(0.5, Math.min(info.hours, limit));
+    return cellFits(cell.dataset.date, slot, hours, info.exclude) ? cell : null;
   }
 
   function moveNodeTo(goalId, nodeId, date, slot) {
@@ -1499,10 +1569,17 @@
     if (!goal || !api.segment(slot) || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return false;
     // 挪到短一点的段里就把时长按段长砍，免得显示成「19:30–22:30 · 3 小时」
     const limit = Math.round((api.segmentMinutes(slot) / 60) * 2) / 2;
-    const nodes = (goal.nodes || []).map((node) =>
-      node.id === nodeId
-        ? Object.assign({}, node, { date: date, slot: slot, hours: Math.max(0.5, Math.min(node.hours || limit, limit)) })
-        : node
+    const node = (goal.nodes || []).find((item) => item.id === nodeId);
+    if (!node) return false;
+    // 没排过期的节点默认占 1 小时（排过的保持自己的时长），超过段长的按段长收
+    const hours = Math.max(0.5, Math.min(Number(node.hours) || Math.min(1, limit), limit));
+    if (!cellFits(date, slot, hours, { goalId: goalId, nodeId: nodeId })) {
+      setSchedStatus(cellFullNote(date, slot, { goalId: goalId, nodeId: nodeId }));
+      renderSchedule();
+      return false;
+    }
+    const nodes = (goal.nodes || []).map((item) =>
+      item.id === nodeId ? Object.assign({}, item, { date: date, slot: slot, hours: hours }) : item
     );
     api.updateGoal(goal.id, { nodes: nodes, outline: outlineText(goal.title, nodes, metaOf(goal)) });
     api.syncGoalTasks(goal.id);
@@ -1540,15 +1617,28 @@
 
     wrap.addEventListener("drop", (event) => {
       const cell = dropCellOf(event.target);
-      if (!cell) return;
-      event.preventDefault();
       const drag = sched.drag;
+      if (!cell) {
+        // 放不下：说清还剩多少，然后什么都不做（等于撤销这次操作）
+        const near = event.target.closest ? event.target.closest(".sched-cell") : null;
+        const info = dragInfo();
+        if (near && info) setSchedStatus(cellFullNote(near.dataset.date, near.dataset.slot, info.exclude));
+        sched.drag = null;
+        wrap.classList.remove("is-dragging");
+        return;
+      }
+      event.preventDefault();
       sched.drag = null;
       wrap.classList.remove("is-dragging");
+      wrap.querySelectorAll(".is-drop").forEach((node) => node.classList.remove("is-drop"));
       if (drag.taskId) {
-        api.placeTask(drag.taskId, { date: cell.dataset.date, slot: cell.dataset.slot });
-        const segment = api.segment(cell.dataset.slot);
-        setSchedStatus("挪到 " + cell.dataset.date.slice(5) + " 的 " + (segment ? segment.start + "–" + segment.end : "") + " 了。");
+        if (api.placeTask(drag.taskId, { date: cell.dataset.date, slot: cell.dataset.slot })) {
+          const segment = api.segment(cell.dataset.slot);
+          setSchedStatus("挪到 " + cell.dataset.date.slice(5) + " 的 " + (segment ? segment.start + "–" + segment.end : "") + " 了。");
+        } else {
+          setSchedStatus("这一格放不下这条任务，没动它。");
+          renderSchedule();
+        }
         return;
       }
       moveNodeTo(drag.goalId, drag.nodeId, cell.dataset.date, cell.dataset.slot);
@@ -1562,8 +1652,8 @@
     });
   }
 
-  // 待安排：还没排进日程表的知识点和任务。列在这儿就能直接拖到格子上（或点一下在下面挑时间），
-  // 「改了计划但日程表没动」的落差也在这儿看得见。
+  // 待安排：还没排进日程表的知识点，以及在任务页点了「加入日程表」的任务。
+  // 拖到格子上就排好了（也可以点一下让它高亮、在下面的面板里挑时间）；任务还能整个从这儿拿掉。
   function renderScheduleTray() {
     const box = document.getElementById("sched-tray");
     if (!box) return;
@@ -1575,7 +1665,7 @@
         nodes.push({ goal: goal, node: node });
       });
     });
-    const tasks = api.list().filter((task) => !task.slot && !(task.goalId && task.nodeId));
+    const tasks = api.list().filter((task) => task.planRequested && !(task.goalId && task.nodeId));
     const total = nodes.length + tasks.length;
     box.hidden = total === 0;
     box.replaceChildren();
@@ -1583,41 +1673,331 @@
 
     const head = el("div", "sched-tray-head");
     head.append(el("strong", "sched-tray-title", "待安排 " + total));
-    head.append(el("span", "task-hint", "拖到空白的格子上，或者点一下在下面挑时间。"));
+    head.append(el("span", "task-hint", "拖到格子上就排好了；点一下能在下面挑日期 / 时段 / 时长。"));
     box.append(head);
 
     const list = el("div", "sched-tray-list");
     nodes.forEach((entry) => {
-      const chip = el("button", "sched-chip is-tray");
-      chip.type = "button";
-      chip.dataset.action = "sched-pick";
+      const chip = el("div", "sched-chip is-tray" + (sched.missing === entry.node.id ? " is-focus" : ""));
+      chip.draggable = true;
       chip.dataset.id = entry.goal.id;
       chip.dataset.node = entry.node.id;
-      chip.draggable = true;
       chip.title = "【" + entry.goal.title + "】" + entry.node.title + "：还没排时间，拖到格子上或点一下挑时间";
-      chip.append(el("span", "sched-chip-title", entry.node.title));
-      chip.append(el("span", "sched-time", "未排期"));
+      const main = el("button", "sched-chip-main");
+      main.type = "button";
+      main.dataset.action = "sched-pick";
+      main.dataset.id = entry.goal.id;
+      main.dataset.node = entry.node.id;
+      main.append(el("span", "sched-chip-title", entry.node.title));
+      main.append(el("span", "sched-time", "未排期"));
+      chip.append(main);
       list.append(chip);
     });
     tasks.forEach((task) => {
-      const chip = el("button", "sched-chip is-tray is-task");
-      chip.type = "button";
-      chip.dataset.action = "sched-task";
-      chip.dataset.task = task.id;
+      const chip = el("div", "sched-chip is-tray is-task" + (sched.missing === task.id ? " is-focus" : ""));
       chip.draggable = true;
+      chip.dataset.task = task.id;
       chip.title = task.title + "：还没排时间，拖到格子上或点一下挑时间";
-      chip.append(el("span", "sched-chip-title", task.title));
-      chip.append(el("span", "sched-time", "未排期"));
+      const main = el("button", "sched-chip-main");
+      main.type = "button";
+      main.dataset.action = "sched-task";
+      main.dataset.task = task.id;
+      main.append(el("span", "sched-chip-title", task.title));
+      main.append(el("span", "sched-time", "未排期"));
+      chip.append(main);
+      const drop = el("button", "sched-chip-drop", "✕");
+      drop.type = "button";
+      drop.dataset.action = "tray-drop";
+      drop.dataset.task = task.id;
+      drop.title = "从待安排里拿掉";
+      drop.setAttribute("aria-label", "把「" + task.title + "」从待安排里拿掉");
+      chip.append(drop);
       list.append(chip);
     });
     box.append(list);
   }
 
+  const SCHED_VIEW_KEY = "spasre-sched-view";
+
+  function saveView() {
+    try {
+      window.localStorage.setItem(SCHED_VIEW_KEY, sched.view);
+    } catch (error) {
+      // 存不下也没关系
+    }
+  }
+
+  function loadView() {
+    try {
+      const value = window.localStorage.getItem(SCHED_VIEW_KEY);
+      return value === "day" || value === "month" ? value : "week";
+    } catch (error) {
+      return "week";
+    }
+  }
+
+  // 首页那份只是这一周的概览（不出现待安排 / 编辑面板），日程表页才是干活的地方
+  function isSchedulePage() {
+    return Boolean(document.getElementById("sched-tray"));
+  }
+
+  function schedWeekDays() {
+    if (!sched.weekStart) sched.weekStart = loadWeek() || weekStartOf(api.today());
+    const days = [];
+    for (let step = 0; step < 7; step += 1) days.push(shiftDate(sched.weekStart, step));
+    return days;
+  }
+
+  function dayShift(key, delta) {
+    const parts = String(key).split("-").map(Number);
+    const time = new Date(parts[0], parts[1] - 1, parts[2] + delta);
+    return time.getFullYear() + "-" + pad2(time.getMonth() + 1) + "-" + pad2(time.getDate());
+  }
+
+  function monthShift(key, delta) {
+    const parts = String(key).split("-").map(Number);
+    const time = new Date(parts[0], parts[1] - 1 + delta, 1);
+    return time.getFullYear() + "-" + pad2(time.getMonth() + 1);
+  }
+
+  function renderSchedHead() {
+    const labels = sched.view === "day" ? ["前一天", "后一天", "今天"] : sched.view === "month" ? ["上个月", "下个月", "本月"] : ["上一周", "下一周", "本周"];
+    const prev = document.getElementById("sched-prev-btn");
+    const next = document.getElementById("sched-next-btn");
+    const today = document.getElementById("sched-today-btn");
+    if (prev) prev.textContent = labels[0];
+    if (next) next.textContent = labels[1];
+    if (today) today.textContent = labels[2];
+    const range = document.getElementById("sched-range");
+    if (range) {
+      if (sched.view === "day") {
+        const date = sched.day || api.today();
+        range.textContent = date + " " + weekdayLabel(date) + (date === api.today() ? "（今天）" : "");
+      } else if (sched.view === "month") {
+        const month = sched.month || api.today().slice(0, 7);
+        range.textContent = month.slice(0, 4) + " 年 " + Number(month.slice(5, 7)) + " 月";
+      } else {
+        const days = schedWeekDays();
+        range.textContent = days[0].slice(5) + " → " + days[6].slice(5);
+      }
+    }
+    document.querySelectorAll(".sched-view-btn").forEach((button) => {
+      const on = button.dataset.view === sched.view;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", String(on));
+    });
+  }
+
+  /* ---------- 日视图：24 小时一条时间轴，任务按自己的时段挂上去 ---------- */
+
+  const DAY_HOUR = 56;
+
+  function renderDayView(box) {
+    const date = sched.day || api.today();
+    box.replaceChildren();
+    const entries = scheduleMap();
+    const minsToPx = (minutes) => Math.round((minutes / 60) * DAY_HOUR);
+
+    const hours = el("div", "day-hours");
+    for (let hour = 0; hour < 24; hour += 1) {
+      const row = el("div", "day-hour");
+      row.style.height = DAY_HOUR + "px";
+      row.append(el("span", "day-hour-label", pad2(hour) + ":00"));
+      hours.append(row);
+    }
+
+    const track = el("div", "day-track");
+    track.style.height = 24 * DAY_HOUR + "px";
+    hours.style.height = 24 * DAY_HOUR + "px";
+
+    // 现在几点：一条横线（只在看今天时出现）
+    if (date === api.today()) {
+      const now = new Date();
+      const line = el("div", "day-now");
+      line.style.top = minsToPx(now.getHours() * 60 + now.getMinutes()) + "px";
+      line.append(el("span", "day-now-label", pad2(now.getHours()) + ":" + pad2(now.getMinutes())));
+      track.append(line);
+    }
+
+    schedRows().forEach((seg) => {
+      const start = api.clockMinutes(seg.start);
+      const end = api.clockMinutes(seg.end);
+      if (start < 0 || end <= start) return;
+      const cell = entries.get(goalStamp(date, seg.key)) || [];
+      const busy = api.slotBusy(date, seg.key);
+      const past = rowPassed(date, seg);
+      const block = el("div", "day-seg");
+      block.style.top = minsToPx(start) + "px";
+      block.style.height = Math.max(30, minsToPx(end - start)) + "px";
+      if (busy) block.classList.add("is-busy");
+      if (past) block.classList.add("is-past");
+      if (cell.length > 0) block.classList.add("has-items");
+
+      const head = el("div", "day-seg-head");
+      head.append(el("span", "day-seg-time", segRange(seg)));
+      const used = api.usedHours(date, seg.key);
+      head.append(el("span", "day-seg-room", used > 0 ? "已排 " + used + " / " + segmentHoursText(seg) + " 小时" : "空着"));
+      block.append(head);
+
+      if (cell.length > 0) {
+        block.append(scheduleCell(date, seg, cell, busy, past, false, true));
+      } else {
+        const empty = el("button", "day-seg-empty", busy ? "非空闲（点一下放开）" : "空着 —— 从上面的待安排拖进来");
+        empty.type = "button";
+        empty.dataset.action = "sched-busy";
+        empty.dataset.date = date;
+        empty.dataset.slot = seg.key;
+        empty.disabled = past;
+        if (past) empty.textContent = "这段时间已经过去了";
+        block.append(empty);
+        if (busy && !past) {
+          const free = el("button", "task-action day-seg-free", "恢复成空闲");
+          free.type = "button";
+          free.dataset.action = "sched-busy";
+          free.dataset.date = date;
+          free.dataset.slot = seg.key;
+          block.append(free);
+        }
+      }
+      track.append(block);
+    });
+
+    const wrap = el("div", "day-grid");
+    wrap.append(hours, track);
+    box.append(wrap);
+  }
+
+  function segmentHoursText(seg) {
+    const minutes = api.segmentMinutes(seg.key);
+    const hours = Math.round((minutes / 60) * 2) / 2;
+    return String(hours);
+  }
+
+  /* ---------- 月视图：一天一格，点颜色看完成情况，悬停看当天有什么 ---------- */
+
+  function daySummary(date) {
+    const entries = scheduleMap();
+    const titles = [];
+    let total = 0;
+    let done = 0;
+    let late = 0;
+    schedRows().forEach((seg) => {
+      (entries.get(goalStamp(date, seg.key)) || []).forEach((entry) => {
+        total += 1;
+        if (entry.task) {
+          titles.push("· " + entry.task.title + "（任务）");
+          return;
+        }
+        const isDone = Boolean(entry.node.done);
+        if (isDone) done += 1;
+        const key = api.nodeKey(entry.goal.id, entry.node.id);
+        const overdue = !isDone && api.overdue().indexOf(key) >= 0;
+        if (overdue) late += 1;
+        titles.push((isDone ? "✓ " : overdue ? "! " : "· ") + entry.node.title);
+      });
+    });
+    let tone = "idle";
+    if (late > 0) tone = "late";
+    else if (total > 0 && done === total) tone = "done";
+    else if (total > 0) tone = date < api.today() ? "late" : "planned";
+    return { titles: titles, total: total, done: done, late: late, tone: tone };
+  }
+
+  function renderMonthView(box) {
+    const monthKey = sched.month || api.today().slice(0, 7);
+    const year = Number(monthKey.slice(0, 4));
+    const month = Number(monthKey.slice(5, 7));
+    const first = new Date(year, month - 1, 1);
+    const lead = (first.getDay() + 6) % 7; // 周一开头
+    const days = new Date(year, month, 0).getDate();
+    box.replaceChildren();
+
+    const week = el("div", "month-week");
+    ["一", "二", "三", "四", "五", "六", "日"].forEach((name) => week.append(el("span", "month-weekday", "周" + name)));
+    const grid = el("div", "month-grid");
+    for (let pad = 0; pad < lead; pad += 1) grid.append(el("div", "month-day is-blank"));
+    for (let day = 1; day <= days; day += 1) {
+      const date = monthKey + "-" + pad2(day);
+      const info = daySummary(date);
+      const cell = el("button", "month-day");
+      cell.type = "button";
+      cell.dataset.action = "sched-day";
+      cell.dataset.date = date;
+      if (date === api.today()) cell.classList.add("is-today");
+      if (date < api.today()) cell.classList.add("is-past");
+      cell.append(el("span", "month-day-num", String(day)));
+      const dot = el("span", "month-dot");
+      dot.dataset.tone = info.tone;
+      cell.append(dot);
+      if (info.total > 0) cell.append(el("span", "month-count", info.done + "/" + info.total));
+      cell.title = date + " " + weekdayLabel(date) + "\n" + (info.titles.length > 0 ? info.titles.join("\n") : "没有安排");
+      grid.append(cell);
+    }
+    box.append(week, grid);
+  }
+
+  // 从别的页跳过来带的信息：?task=xxx 定位到它那周 / 那天（还没排期的就靠待安排里那个高亮）
+  function applySchedFocus() {
+    if (typeof window.URLSearchParams !== "function") return;
+    const params = new window.URLSearchParams(window.location.search);
+    const taskId = params.get("task");
+    const date = params.get("date");
+    const view = params.get("view");
+    if (view === "day" || view === "month" || view === "week") sched.view = view;
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      sched.day = date;
+      sched.weekStart = weekStartOf(date);
+      sched.month = date.slice(0, 7);
+      saveWeek();
+    }
+    if (taskId) {
+      sched.missing = taskId;
+      const task = api.list().find((item) => item.id === taskId);
+      if (task && task.date) {
+        sched.weekStart = weekStartOf(task.date);
+        sched.day = task.date;
+        sched.month = task.date.slice(0, 7);
+        saveWeek();
+        if (task.slot) {
+          sched.view = view === "day" ? "day" : "week";  // 排好的任务：直接给到它那一周（那天也带上）
+          sched.task = task.id;                          // 并把它那块的面板打开
+        }
+      }
+    }
+    if (sched.view === "day" && !sched.day) sched.day = api.today();
+    if (sched.view === "month" && !sched.month) sched.month = api.today().slice(0, 7);
+    if (taskId || date || view) {
+      try {
+        window.history.replaceState(null, "", "schedule.html");
+      } catch (error) {
+        // 换不了就算了，不影响用
+      }
+    }
+  }
+
   function renderSchedule() {
-    renderScheduleTable();
-    renderScheduleEdit();
+    const wrap = document.getElementById("sched-wrap");
+    const dayBox = document.getElementById("sched-day");
+    const monthBox = document.getElementById("sched-month");
+    sched.preview = !isSchedulePage();
+    // 首页：只画这一周的概览
+    if (sched.preview) {
+      if (wrap) wrap.hidden = false;
+      renderScheduleTable();
+      return;
+    }
+    renderScheduleWarn();
     renderScheduleUndo();
     renderScheduleTray();
+    renderSchedHead();
+    const view = sched.view || "week";
+    if (wrap) wrap.hidden = view !== "week";
+    if (dayBox) dayBox.hidden = view !== "day";
+    if (monthBox) monthBox.hidden = view !== "month";
+    if (view === "day" && dayBox) renderDayView(dayBox);
+    else if (view === "month" && monthBox) renderMonthView(monthBox);
+    else renderScheduleTable();
+    renderScheduleEdit();
   }
 
   // 时间段的问题一律挂在日程表顶部（跟上一段叠了、时间没填完、只剩一段），
@@ -1802,15 +2182,22 @@
     if (sched.note) box.append(el("p", "task-hint sched-edit-note", sched.note));
   }
 
-  // 改日期 / 时段 / 时长：改完立刻写回，页面自己会重画
+  // 改日期 / 时段 / 时长：改完立刻写回，页面自己会重画；放不下就原样退回
   function movePicked(date, slot, hours) {
     const picked = pickedNode();
     if (!picked) return;
+    const limitSlot = slot || picked.node.slot;
+    const limit = Math.round((api.segmentMinutes(limitSlot) / 60) * 2) / 2;
     const next = {
       date: date || picked.node.date,
-      slot: slot || picked.node.slot,
-      hours: hours ? Math.max(0.5, hours) : picked.node.hours
+      slot: limitSlot,
+      hours: Math.max(0.5, Math.min(hours ? Math.max(0.5, hours) : Number(picked.node.hours) || limit, limit))
     };
+    if (!cellFits(next.date, next.slot, next.hours, { goalId: picked.goal.id, nodeId: picked.node.id })) {
+      setSchedStatus(cellFullNote(next.date, next.slot, { goalId: picked.goal.id, nodeId: picked.node.id }));
+      renderSchedule();
+      return;
+    }
     if (api.slotPassed(next.date, next.slot)) {
       sched.note = "这段时间已经过去了，换一段吧。";
       renderSchedule();
@@ -2506,8 +2893,17 @@
     const id = trigger.dataset.id;
 
     if (action === "sched-prev" || action === "sched-next") {
-      const base = sched.weekStart || weekStartOf(api.today());
-      sched.weekStart = shiftDate(base, action === "sched-prev" ? -7 : 7);
+      const step = action === "sched-prev" ? -1 : 1;
+      if (sched.view === "day") {
+        sched.day = dayShift(sched.day || api.today(), step);
+        sched.weekStart = weekStartOf(sched.day);
+        sched.month = sched.day.slice(0, 7);
+      } else if (sched.view === "month") {
+        sched.month = monthShift(sched.month || api.today().slice(0, 7), step);
+      } else {
+        const base = sched.weekStart || weekStartOf(api.today());
+        sched.weekStart = shiftDate(base, step * 7);
+      }
       saveWeek();
       renderSchedule();
       return;
@@ -2515,7 +2911,39 @@
 
     if (action === "sched-today") {
       sched.weekStart = weekStartOf(api.today());
+      sched.day = api.today();
+      sched.month = api.today().slice(0, 7);
       saveWeek();
+      renderSchedule();
+      return;
+    }
+
+    if (action === "sched-view") {
+      const view = trigger.dataset.view;
+      if (view !== "week" && view !== "day" && view !== "month") return;
+      sched.view = view;
+      if (view === "day" && !sched.day) sched.day = api.today();
+      if (view === "month" && !sched.month) sched.month = api.today().slice(0, 7);
+      saveView();
+      renderSchedule();
+      return;
+    }
+
+    // 月视图点某一天 → 钻到那一天的日视图
+    if (action === "sched-day") {
+      sched.day = trigger.dataset.date || api.today();
+      sched.weekStart = weekStartOf(sched.day);
+      sched.month = sched.day.slice(0, 7);
+      sched.view = "day";
+      saveView();
+      saveWeek();
+      renderSchedule();
+      return;
+    }
+
+    if (action === "tray-drop") {
+      api.planTask(trigger.dataset.task, false);
+      setSchedStatus("从待安排里拿掉了（它原来的时间安排不受影响）。");
       renderSchedule();
       return;
     }
@@ -2698,6 +3126,8 @@
   wireGoals();
   // 上次改了还没保存的那份时间段（存在本地）接着用
   sched.draft = loadDraft();
+  sched.view = loadView();
+  applySchedFocus();
   ensureScheduled();
   renderGoals();
   renderSchedule();

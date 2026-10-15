@@ -2335,6 +2335,174 @@ html { overflow-x: clip; }
 .sched-chip.is-tray .sched-chip-title { -webkit-line-clamp: 1; }
 
 .sched-chip.is-tray .sched-time { color: var(--muted); }
+
+/* 待安排里的块：里面是「点一下」的主按钮 + 可选的 ✕ */
+.sched-chip.is-tray { flex-direction: row; align-items: center; gap: 6px; padding: 4px 6px 4px 4px; }
+
+.sched-chip.is-tray.is-focus { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.sched-chip-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sched-chip-drop {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sched-chip-drop:hover { color: var(--danger); border-color: var(--danger); }
+
+/* 首页那份预览：块不响应鼠标手势 */
+.sched-chip.is-static, .sched-chip.is-static * { cursor: default; }
+
+/* 周 / 日 / 月 三个按钮 */
+.sched-views { display: flex; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+
+.sched-views .task-action { border: 0; border-radius: 0; }
+
+.sched-views .task-action + .task-action { border-left: 1px solid var(--line); }
+
+.sched-views .task-action.is-on { background: var(--brand); border-color: var(--brand); color: var(--paper); }
+
+.sched-more { margin-top: 10px; }
+
+/* ---------- 日视图：24 小时一条时间轴 ---------- */
+.day-grid { display: flex; gap: 10px; margin-top: 12px; padding: 6px 0; overflow-y: auto; max-height: 74vh; }
+
+.day-hours { flex: 0 0 52px; }
+
+.day-hour { display: flex; justify-content: flex-end; }
+
+.day-hour-label { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; transform: translateY(-6px); }
+
+.day-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+  background: repeating-linear-gradient(180deg, transparent 0 55px, var(--line) 55px 56px);
+}
+
+.day-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--sakura); }
+
+.day-now-label { position: absolute; left: 4px; top: -8px; color: var(--sakura); font-size: 11px; }
+
+.day-seg {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+
+.day-seg.is-busy { border-left-color: var(--muted); background: repeating-linear-gradient(135deg, var(--field) 0 6px, var(--line) 6px 12px); }
+
+.day-seg.is-past { opacity: .55; }
+
+.day-seg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+
+.day-seg-time { color: var(--soft-ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.day-seg-room { color: var(--muted); font-size: 11px; }
+
+.day-seg-list { display: grid; gap: 4px; }
+
+.day-seg-empty {
+  align-self: flex-start;
+  padding: 4px 8px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.day-seg-empty:hover:not(:disabled) { color: var(--brand); border-color: var(--brand); }
+
+.day-seg-empty:disabled { cursor: default; }
+
+.day-seg-free { align-self: flex-start; font-size: 12px; }
+
+/* 日视图里复用周视图的块，把那层「格子」外皮收掉 */
+.day-seg .sched-cell.is-inline {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  gap: 4px;
+}
+
+/* ---------- 月视图：一天一格，点看完成情况 ---------- */
+.month-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 12px 0 6px; }
+
+.month-weekday { color: var(--muted); font-size: 12px; text-align: center; }
+
+.month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+
+.month-day {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  align-items: center;
+  gap: 4px;
+  min-height: 76px;
+  padding: 6px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.month-day:hover { border-color: var(--brand); }
+
+.month-day.is-blank { border: 0; background: transparent; cursor: default; }
+
+.month-day.is-past { background: transparent; }
+
+.month-day.is-today { border-color: var(--sakura); box-shadow: inset 0 0 0 1px var(--sakura); }
+
+.month-day-num { color: var(--soft-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.month-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+
+.month-dot[data-tone="planned"] { background: var(--brand); }
+
+.month-dot[data-tone="done"] { background: var(--ok); }
+
+.month-dot[data-tone="late"] { background: var(--danger); }
+
+.month-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* ---------- 外观：密度 / 字号（设置页的「外观」三档） ---------- */
 
 /* 紧凑：主要容器的内边距、列表间距、日程表格子高度一起收 */
