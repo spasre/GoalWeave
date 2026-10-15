@@ -162,6 +162,10 @@
   const DEFAULT_SETTINGS = {
     defaultCategory: "学习",
     dailyRecommendation: true,
+    // 每日推荐要不要统一排进日程表（默认不排：想让它占个时间段就勾上）
+    dailyAutoSchedule: false,
+    // 第一次排期之前那套「先定时间段、再划非空闲」的引导走完没走完
+    planSetupDone: false,
     interests: [],
     // 「每日推荐」自己记下的方向（用户没挑够时用），界面里跟用户自己挑的颜色不一样
     autoInterests: [],
@@ -462,7 +466,8 @@
       chat: [],
       dailySeen: [],
       daily: null,
-      schedule: { busy: [] }
+      // busy 是「具体某天」的非空闲段（老数据），busyWeekly 是「每周这一天」的（默认口径），两者都算忙
+      schedule: { busy: [], busyWeekly: [] }
     };
   }
 
@@ -581,6 +586,128 @@
     if (!store.schedule) store.schedule = { busy: [] };
     store.schedule.busy = list.slice(-400);
     save();
+    return true;
+  }
+
+  /* ---------- 非空闲：默认「每周一致」 ---------- */
+
+  // 周一 = 1 … 周日 = 7
+  function weekdayIndex(date) {
+    const time = new Date(String(date) + "T00:00:00");
+    if (isNaN(time.getTime())) return 0;
+    return time.getDay() === 0 ? 7 : time.getDay();
+  }
+
+  function busyWeeklyList() {
+    return Array.isArray(store.schedule && store.schedule.busyWeekly) ? store.schedule.busyWeekly.slice() : [];
+  }
+
+  function weeklyKey(date, key) {
+    return weekdayIndex(date) + ":" + String(key || "");
+  }
+
+  // 这一段忙不忙：每周规则 + 具体某天的老数据，都算忙
+  function slotBusy(date, key) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) || !segmentOf(key)) return false;
+    return busyWeeklyList().indexOf(weeklyKey(date, key)) >= 0 || busyList().indexOf(slotKey(date, key)) >= 0;
+  }
+
+  // 点一下就按「每周这一天」记/取消，顺手把这一天旧的「具体日期」标记清掉，免得一格两套数据
+  function setBusyWeekly(date, key, on) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) || !segmentOf(key)) return false;
+    if (!store.schedule) store.schedule = { busy: [], busyWeekly: [] };
+    const stamp = weeklyKey(date, key);
+    const list = busyWeeklyList().filter((item) => item !== stamp);
+    if (on) list.push(stamp);
+    store.schedule.busyWeekly = list.slice(-70);
+    store.schedule.busy = busyList().filter((item) => item !== slotKey(date, key));
+    save();
+    return true;
+  }
+
+  /* ---------- 任务占一个时段 ---------- */
+
+  // 某一天每段的状态：空不空、谁占着、为什么不能排。给「加入日程表」和每日推荐自动占位用
+  function slotStates(date, options) {
+    const opts = options || {};
+    const held = new Map();
+    (store.goals || []).forEach((goal) => {
+      (goal.nodes || []).forEach((node) => {
+        if (node.date === date && node.slot && !node.done) held.set(slotKey(date, node.slot), (goal.title ? goal.title + "：" : "") + node.title);
+      });
+    });
+    store.tasks.forEach((task) => {
+      if (task.id === opts.exclude || task.date !== date || !task.slot) return;
+      held.set(slotKey(date, task.slot), task.title);
+    });
+    return segments().map((seg) => {
+      const stamp = slotKey(date, seg.key);
+      let reason = "";
+      if (slotPassed(date, seg.key)) reason = "已经过去了";
+      else if (slotBusy(date, seg.key)) reason = "非空闲";
+      else if (held.has(stamp)) reason = "已有安排";
+      return {
+        key: seg.key,
+        label: seg.start + "–" + seg.end,
+        start: seg.start,
+        end: seg.end,
+        minutes: segmentMinutesTotal(seg),
+        held: held.get(stamp) || "",
+        reason: reason,
+        free: !reason
+      };
+    });
+  }
+
+  // 把任务排进日程表（传 slot；不传 slot 就是取消安排）
+  function placeTask(id, patch) {
+    const task = store.tasks.find((item) => item.id === id);
+    if (!task) return false;
+    const source = patch || {};
+    if (!source.slot) {
+      delete task.slot;
+      delete task.hours;
+      save();
+      renderAll();
+      return true;
+    }
+    const seg = segmentOf(source.slot);
+    if (!seg) return false;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(source.date || ""))) task.date = String(source.date);
+    task.slot = seg.key;
+    const room = Math.round((segmentMinutesTotal(seg) / 60) * 2) / 2;
+    const want = Number(source.hours) > 0 ? Number(source.hours) : Math.min(1, room);
+    task.hours = Math.max(0.5, Math.min(room, Math.round(want * 2) / 2));
+    save();
+    renderAll();
+    return true;
+  }
+
+  // 每日推荐统一进日程表：挑今天还空着、装得下 1 小时的一段（偏好从晚到早，跟排知识点一个习惯）
+  function autoPlaceTask(task, date) {
+    const open = slotStates(date).filter((item) => item.free);
+    if (open.length === 0) return false;
+    const fitting = open.filter((item) => item.minutes >= 60);
+    const pick = fitting.length > 0 ? fitting[fitting.length - 1] : open[open.length - 1];
+    task.date = date;
+    task.slot = pick.key;
+    task.hours = Math.min(1, Math.round((pick.minutes / 60) * 2) / 2);
+    return true;
+  }
+
+  // 开关：打开时顺手把今天已经生成的那条推荐也排进去（没空位就先不排）
+  function setDailyAutoSchedule(on) {
+    if (!on) {
+      updateSettings({ dailyAutoSchedule: false });
+      return false;
+    }
+    updateSettings({ dailyAutoSchedule: true });
+    const today = todayKey();
+    const task = store.tasks.find((item) => item.source === "daily" && item.date === today && !item.slot);
+    if (task && autoPlaceTask(task, today)) {
+      save();
+      renderAll();
+    }
     return true;
   }
 
@@ -1391,6 +1518,8 @@
     };
     const links = store.daily.links || [];
     if (links.length > 0) task.links = links;
+    // 勾了「统一排进日程表」就顺手占一个今天的空段（没空位就先不排，别硬塞）
+    if (store.settings.dailyAutoSchedule) autoPlaceTask(task, today);
     store.tasks.push(task);
     save();
     return true;
@@ -1618,6 +1747,67 @@
     return meta;
   }
 
+  // 挑一个时段，把任务（比如每日推荐）排进日程表
+  function openTaskSlot(taskId) {
+    const task = store.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const sheet = openSheet("把「" + task.title + "」排进日程表");
+
+    const dateField = el("label", "task-field");
+    dateField.append(el("span", null, "日期"));
+    const dateInput = document.createElement("input");
+    dateInput.className = "task-input";
+    dateInput.type = "date";
+    dateInput.value = task.date || todayKey();
+    dateField.append(dateInput);
+    sheet.body.append(dateField);
+
+    sheet.body.append(el("p", "task-hint", "挑一段。灰色的是排不了的：「非空闲」是你自己划掉的，想放开就去日程表点那一格。"));
+    const list = el("div", "task-checks");
+    sheet.body.append(list);
+
+    function renderSlots() {
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(dateInput.value) ? dateInput.value : todayKey();
+      list.replaceChildren();
+      const states = slotStates(date, { exclude: task.id });
+      if (states.length === 0) {
+        list.append(el("p", "task-hint", "一天还没分时间段，先去日程表加点段。"));
+        return;
+      }
+      states.forEach((slot) => {
+        const on = task.slot === slot.key && task.date === date;
+        const button = el("button", "interest-tag" + (on ? " is-on" : ""), slot.label + (slot.reason ? "（" + slot.reason + "）" : ""));
+        button.type = "button";
+        button.disabled = Boolean(slot.reason);
+        button.title = slot.reason || "排到 " + slot.label;
+        button.addEventListener("click", () => {
+          placeTask(task.id, { date: date, slot: slot.key });
+          sheet.close();
+        });
+        list.append(button);
+      });
+    }
+
+    dateInput.addEventListener("change", renderSlots);
+    renderSlots();
+
+    const foot = el("div", "task-actions-cell");
+    if (task.slot) {
+      const clear = el("button", "task-action task-action-danger", "取消安排");
+      clear.type = "button";
+      clear.addEventListener("click", () => {
+        placeTask(task.id, {});
+        sheet.close();
+      });
+      foot.append(clear);
+    }
+    const cancel = el("button", "task-action", "算了");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => sheet.close());
+    foot.append(cancel);
+    sheet.body.append(foot);
+  }
+
   function taskItem(task, options) {
     const item = el(
       "li",
@@ -1646,6 +1836,12 @@
 
     if (!options || options.actions !== false) {
       const actions = el("div", "task-actions");
+      // 任务也能占日程表的一格：每日推荐想固定到晚上那一段，就用这个
+      const plan = el("button", "task-action", task.slot ? "改时段" : "加入日程表");
+      plan.type = "button";
+      plan.dataset.action = "task-slot";
+      plan.dataset.id = task.id;
+      plan.title = task.slot ? "改它的时段，或者取消安排" : "把这条排进日程表的某个空闲时段";
       const edit = el("button", "task-action", "编辑");
       edit.type = "button";
       edit.dataset.action = "edit";
@@ -1654,7 +1850,7 @@
       remove.type = "button";
       remove.dataset.action = "remove";
       remove.dataset.id = task.id;
-      actions.append(edit, remove);
+      actions.append(plan, edit, remove);
       item.append(actions);
     }
     return item;
@@ -2061,6 +2257,8 @@
   function renderDailySwitch() {
     const toggle = document.getElementById("daily-recommend-toggle");
     if (toggle) toggle.checked = Boolean(store.settings.dailyRecommendation);
+    const schedule = document.getElementById("daily-schedule-toggle");
+    if (schedule) schedule.checked = Boolean(store.settings.dailyAutoSchedule);
     const hint = document.getElementById("daily-recommend-hint");
     if (!hint) return;
     if (!store.settings.dailyRecommendation) {
@@ -2910,6 +3108,11 @@
     const action = trigger.dataset.action;
     const id = trigger.dataset.id;
 
+    if (action === "task-slot") {
+      openTaskSlot(id);
+      return;
+    }
+
     if (action === "complete" && completeTask(id, "done")) {
       renderAll();
     } else if (action === "remove" && completeTask(id, "removed")) {
@@ -3020,6 +3223,15 @@
     if (dailyToggle) {
       dailyToggle.addEventListener("change", () => {
         setDailyRecommendation(dailyToggle.checked);
+        renderDailySwitch();
+      });
+    }
+
+    // 「把每日推荐排进日程表」：打开时顺手把今天已经生成的那条也排一下
+    const dailySchedule = document.getElementById("daily-schedule-toggle");
+    if (dailySchedule) {
+      dailySchedule.addEventListener("change", () => {
+        setDailyAutoSchedule(dailySchedule.checked);
         renderDailySwitch();
       });
     }
@@ -3501,6 +3713,31 @@
       const ok = setBusy(date, key, on);
       renderAll();
       return ok;
+    },
+    // 非空闲默认每周一致：网格点一下走的就是这个
+    busyWeekly: busyWeeklyList,
+    setBusyWeekly: function (date, key, on) {
+      const ok = setBusyWeekly(date, key, on);
+      renderAll();
+      return ok;
+    },
+    slotBusy: slotBusy,
+    // 任务占时段：哪几段空着 / 排进去 / 取消安排
+    slotStates: slotStates,
+    placeTask: placeTask,
+    unplaceTask: function (id) {
+      return placeTask(id, {});
+    },
+    // 每日推荐要不要统一排进日程表；第一次排期的引导走完没走完
+    dailyAutoSchedule: function () {
+      return Boolean(store.settings.dailyAutoSchedule);
+    },
+    setDailyAutoSchedule: setDailyAutoSchedule,
+    planSetupDone: function () {
+      return Boolean(store.settings.planSetupDone);
+    },
+    markPlanSetup: function () {
+      updateSettings({ planSetupDone: true });
     },
     slotTime: slotTime,
     segment: function (key) {

@@ -73,10 +73,12 @@
             <span id="sched-range"></span>
             <button class="task-action" type="button" data-action="sched-next">下一周</button>
             <button class="task-action" type="button" data-action="sched-today">本周</button>
+            <button class="task-action" type="button" data-action="sched-replan" title="按现在的空闲时间，把没做完的知识点重新排一遍（可以撤销）">重新规划</button>
             <button class="task-action" type="button" data-action="segment-add" title="加一个时间段" aria-label="添加时间段">添加时间段</button>
           </div>
         </div>
         <p class="sched-warn" id="sched-warn" role="status" hidden></p>
+        <p class="sched-undo" id="sched-undo" role="status" hidden></p>
         <div class="sched-wrap" id="sched-wrap"></div>
         <p class="task-hint" id="sched-status" role="status"></p>
         <div class="sched-edit" id="sched-edit" hidden></div>

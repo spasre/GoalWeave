@@ -2240,6 +2240,71 @@ html { overflow-x: clip; }
 .ipick-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 
 .ipick-note { margin-right: auto; color: var(--muted); font-size: 12px; }
+
+/* ---------- 目标卡：图摆在前，大纲能收起来，上面一行「下一个」 ---------- */
+.goal-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 10px;
+  margin: 10px 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--accent-rgb, 84, 118, 172), .06);
+}
+
+.goal-next-label { color: var(--muted); font-size: 12px; }
+
+.goal-next-title { color: var(--ink); font-size: 14px; }
+
+.goal-next-when { color: var(--brand); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.goal-next-progress { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+.goal-next-brief { flex: 1 1 100%; margin: 0; color: var(--soft-ink); font-size: 12px; }
+
+.goal-outline-fold > summary {
+  cursor: pointer;
+  color: var(--soft-ink);
+  font-size: 13px;
+  list-style: none;
+}
+
+.goal-outline-fold > summary::-webkit-details-marker { display: none; }
+
+.goal-outline-fold > summary::before { content: "▸ "; }
+
+.goal-outline-fold[open] > summary::before { content: "▾ "; }
+
+.goal-outline-fold > summary:hover { color: var(--brand); }
+
+/* 第一次排期：时间段在这儿就地改 */
+.segment-setup { display: grid; gap: 8px; }
+
+.segment-setup-row { display: flex; gap: 8px; }
+
+.segment-setup-row .task-input { flex: 1; min-width: 0; }
+
+.sched-undo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  font-size: 12px;
+}
+
+.sched-undo[hidden] { display: none; }
+
+.sched-undo .sched-warn-text { color: var(--soft-ink); }
+
+.sched-chip.is-task { border-style: dashed; }
 /* ---------- 外观：密度 / 字号（设置页的「外观」三档） ---------- */
 
 /* 紧凑：主要容器的内边距、列表间距、日程表格子高度一起收 */
