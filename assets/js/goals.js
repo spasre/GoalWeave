@@ -295,17 +295,21 @@
 
   function localGoalPlan(goal) {
     const topic = topicOf(goal.title);
-    const refs = api.matchArticles(goal.title + " " + String(goal.detail || ""), 6);
-    const make = (title, brief, links) => ({ title: title, brief: brief, deps: [], links: links || [], date: "", done: false });
-    const doc = (ref) => make("读《" + ref.title + "》", ref.title, [ref]);
+    const make = (title, brief) => ({ title: title, brief: brief, deps: [], links: [], date: "", done: false });
 
     const layers = [
-      [make("搞清「" + topic + "」的核心概念与术语", "先建立整体印象，别急着抠细节")].concat(refs.slice(0, 2).map(doc)),
+      [
+        make("搞清「" + topic + "」的核心概念与术语", "先建立整体印象，别急着抠细节"),
+        make("把「" + topic + "」要用的环境 / 工具装好跑起来", "环境先通，后面才不卡")
+      ],
       [
         make("跟着资料跑一遍「" + topic + "」的最小例子", "跑通一遍比读十遍管用"),
         make("记下「" + topic + "」容易踩的坑", "把报错和弯路记成清单")
       ],
-      [make("弄懂「" + topic + "」最关键的一个机制", "挑一个核心机制，读到能讲给别人听")].concat(refs.slice(2, 4).map(doc)),
+      [
+        make("弄懂「" + topic + "」最关键的一个机制", "挑一个核心机制，读到能讲给别人听"),
+        make("整理一份「" + topic + "」的常用命令 / API 速查", "边用边补，别一次写完")
+      ],
       [
         make("用「" + topic + "」完成一个小项目", "范围定小一点，能跑起来就行"),
         make("拿「" + topic + "」解决一个真实问题", "最好是自己手头正烦的那件事")
@@ -343,7 +347,6 @@
   }
 
   function goalSystemPrompt() {
-    const catalog = api.articleSources().map((entry) => "- " + entry.title + "  " + entry.url).join("\n");
     return [
       "你在帮用户把一条长期目标拆成一张学习计划的知识点图（DAG）。",
       "今天是 " + api.today() + "。",
@@ -353,9 +356,7 @@
       "1. 8-14 个节点，从打基础一路排到实践和总结。",
       "2. deps 里只能写这份计划里出现过的 title；最基础的节点 deps 给空数组。",
       "3. 学习顺序必须满足拓扑序：每个节点只能依赖排在它前面的节点，绝对不要出现环。",
-      "4. links 只能从下面这份目录里挑 0-2 条，url 原样照抄，不要自己编：",
-      catalog,
-      "目录里没有对得上的就给空数组。"
+      "4. 不要给资料链接：阅读资料由界面上的「延伸阅读」按知识点现找（那边会验证链接能不能打开），links 一律给空数组。"
     ].join("\n");
   }
 

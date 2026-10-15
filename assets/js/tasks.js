@@ -32,130 +32,6 @@
     "弄懂 -Werror 下版本升级的告警对齐思路",
     "复习寄存器分配与指令选择的基本流程"
   ];
-  // 推荐阅读的来源。全部是公开文档，链接在 2026-10 逐个确认能打开；
-  // tags 用来跟任务标题 / 分类做关键词匹配，命中的 tag 越多排得越靠前。
-  const ARTICLE_SOURCES = [
-    {
-      title: "LLVM Language Reference：IR 语法与指令参考",
-      url: "https://llvm.org/docs/LangRef.html",
-      tags: ["llvm", "ir", "ssa", "指令", "语言参考", "汇编"]
-    },
-    {
-      title: "LLVM IR：未定义值 undef 与 poison",
-      url: "https://llvm.org/docs/LangRef.html#undefined-values",
-      tags: ["ub", "未定义行为", "undef", "poison", "undefined", "未定义值"]
-    },
-    {
-      title: "LLVM IR：指针别名与 provenance 溯源",
-      url: "https://llvm.org/docs/LangRef.html#pointeraliasing",
-      tags: ["provenance", "溯源", "指针", "别名", "alias", "getelementptr"]
-    },
-    {
-      title: "LLVM IR：调用约定（Calling Conventions）",
-      url: "https://llvm.org/docs/LangRef.html#calling-conventions",
-      tags: ["abi", "调用约定", "calling", "约定", "传参"]
-    },
-    {
-      title: "LLVM Programmer's Manual：源码结构与常用 API",
-      url: "https://llvm.org/docs/ProgrammersManual.html",
-      tags: ["llvm", "源码", "数据结构", "api", "阅读源码"]
-    },
-    {
-      title: "Writing an LLVM Pass：写一个 Pass",
-      url: "https://llvm.org/docs/WritingAnLLVMPass.html",
-      tags: ["pass", "pass manager", "优化", "分层"]
-    },
-    {
-      title: "LLVM Analysis and Transform Passes：Pass 清单",
-      url: "https://llvm.org/docs/Passes.html",
-      tags: ["pass", "优化", "清单", "列表", "分析"]
-    },
-    {
-      title: "Alias Analysis Infrastructure：别名分析",
-      url: "https://llvm.org/docs/AliasAnalysis.html",
-      tags: ["别名分析", "alias analysis", "指针", "优化"]
-    },
-    {
-      title: "The LLVM Target-Independent Code Generator：后端与指令选择",
-      url: "https://llvm.org/docs/CodeGenerator.html",
-      tags: ["代码生成", "寄存器分配", "指令选择", "后端", "合法化", "legalization"]
-    },
-    {
-      title: "MIR Language Reference：机器层中间表示",
-      url: "https://llvm.org/docs/MIRLangRef.html",
-      tags: ["mir", "机器指令", "指令选择", "寄存器", "machineir"]
-    },
-    {
-      title: "LLVM Testing Infrastructure Guide：lit 与测试用例写法",
-      url: "https://llvm.org/docs/TestingGuide.html",
-      tags: ["测试", "lit", "测试用例", "dts", "用例"]
-    },
-    {
-      title: "LLVM Release Notes：版本变化与迁移说明",
-      url: "https://llvm.org/docs/ReleaseNotes.html",
-      tags: ["版本升级", "升级", "迁移", "release", "release notes", "版本"]
-    },
-    {
-      title: "Clang Diagnostics Reference：告警诊断参考",
-      url: "https://clang.llvm.org/docs/DiagnosticsReference.html",
-      tags: ["clang", "告警", "诊断", "warning", "diagnostic", "werror", "告警对齐"]
-    },
-    {
-      title: "Clang Internals Manual：诊断与前端实现",
-      url: "https://clang.llvm.org/docs/InternalsManual.html",
-      tags: ["clang", "诊断", "diagnostic", "实现", "源码", "前端"]
-    },
-    {
-      title: "LLVM Command Guide：opt 命令",
-      url: "https://llvm.org/docs/CommandGuide/opt.html",
-      tags: ["opt", "o2", "优化", "命令行", "指令折叠", "折叠"]
-    },
-    {
-      title: "LLVM Command Guide：FileCheck",
-      url: "https://llvm.org/docs/CommandGuide/FileCheck.html",
-      tags: ["filecheck", "测试", "用例", "断言", "匹配"]
-    },
-    {
-      title: "Getting Started with the LLVM System：编译与目录结构",
-      url: "https://llvm.org/docs/GettingStarted.html",
-      tags: ["构建", "入门", "build", "cmake", "编译"]
-    },
-    {
-      title: "How to Update Debug Info：调试信息的修改",
-      url: "https://llvm.org/docs/HowToUpdateDebugInfo.html",
-      tags: ["调试信息", "debug", "dwarf", "调试"]
-    },
-    {
-      title: "GDB 官方文档：断点、观察点与调试脚本",
-      url: "https://www.gnu.org/software/gdb/documentation/",
-      tags: ["gdb", "调试", "断点", "观察点", "watchpoint", "调试器"]
-    },
-    {
-      title: "cppreference：C++ 未定义行为",
-      url: "https://en.cppreference.com/w/cpp/language/ub",
-      tags: ["ub", "未定义行为", "c++", "行为"]
-    },
-    {
-      title: "MDN：JavaScript 参考",
-      url: "https://developer.mozilla.org/zh-CN/docs/Web/JavaScript",
-      tags: ["javascript", "js", "前端", "网页", "脚本"]
-    },
-    {
-      title: "Jekyll 文档：静态站点与文章",
-      url: "https://jekyllrb.com/docs/",
-      tags: ["jekyll", "博客", "静态站点", "文章", "站点"]
-    },
-    {
-      title: "Markdown 基本语法",
-      url: "https://www.markdownguide.org/basic-syntax/",
-      tags: ["markdown", "写作", "排版", "语法"]
-    },
-    {
-      title: "Git 官方文档",
-      url: "https://git-scm.com/docs",
-      tags: ["git", "版本控制", "提交", "分支"]
-    }
-  ];
   const LINK_LIMIT = 3;
   const CHAT_LIMIT = 40;
   const DAILY_SEEN_LIMIT = 40;
@@ -1079,21 +955,6 @@
     return haystack.includes(tag);
   }
 
-  function matchArticles(text, limit) {
-    const haystack = String(text || "").toLowerCase();
-    if (!haystack) return [];
-    return ARTICLE_SOURCES.map((entry) => {
-      let score = 0;
-      entry.tags.forEach((tag) => {
-        if (tagHit(haystack, tag)) score += tag.length >= 3 ? 3 : 2;
-      });
-      return { entry, score };
-    })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title, "zh-CN"))
-      .slice(0, limit || LINK_LIMIT)
-      .map((item) => ({ title: item.entry.title, url: item.entry.url, source: linkHost(item.entry.url) }));
-  }
 
   // 助手给的链接要过一遍：只收 http/https，去重，最多 3 条。
   function normalizeLinks(list) {
@@ -1110,15 +971,13 @@
     return out.slice(0, LINK_LIMIT);
   }
 
-  // 任务自己带链接就用任务的（助手挑的），否则按标题和分类去目录里找。
+  // 任务自己带链接（助手找的）就用它；没有就让调用方去问助手（见 openLinkDialog）。
   function linksForTask(task) {
     if (!task) return [];
-    const stored = normalizeLinks(task.links);
-    if (stored.length > 0) return stored;
-    return matchArticles(String(task.title || "") + " " + String(task.category || ""), LINK_LIMIT);
+    return normalizeLinks(task.links);
   }
 
-  /* ---------- 延伸阅读：内置目录不够就让助手找（reading.suggest） ---------- */
+  /* ---------- 延伸阅读：直接让助手找（reading.suggest） ---------- */
 
   // 让后端的模型找几条：它会顺手真去请求每个地址，打不开的不会回来，所以编的链接骗不过去。
   async function askReadingLinks(title, context) {
@@ -1193,12 +1052,13 @@
 
   function openLinkDialog(task) {
     if (!task) return false;
-    const links = linksForTask(task);
-    return openLinkList(task.title, links, {
-      empty: "这份目录里没有对得上的 —— 点下面的「让助手找延伸阅读」，让模型去找几条（它会先验证链接能不能打开）。",
+    const stored = linksForTask(task);
+    // 还没找过资料：打开就问助手，不用用户再点一下
+    return openLinkList(task.title, stored, {
       taskId: task.id,
       brief: task.brief,
-      category: task.category
+      category: task.category,
+      auto: stored.length === 0
     });
   }
 
@@ -1211,6 +1071,7 @@
     const list = overlay.querySelector("[data-role=link-list]");
     const ask = overlay.querySelector("[data-role=link-ask]");
     const items = normalizeLinks(links);
+    const canAsk = Boolean(window.spasreBackend && window.spasreBackend.online) && agentConfigured();
 
     // 弹窗是复用的一个，所以这次问的是谁得记下来（异步回来时照着填）
     linkDialogContext = {
@@ -1221,21 +1082,22 @@
     };
     linkAskToken += 1; // 上一次的异步结果作废
 
-    if (heading) heading.textContent = String(title || "推荐阅读");
+    if (heading) heading.textContent = String(title || "延伸阅读");
     if (ask) {
-      const ready = Boolean(window.spasreBackend && window.spasreBackend.online);
       ask.hidden = config.ask === false;
-      ask.disabled = !ready;
-      ask.textContent = items.length > 0 ? "让助手再找几条" : "让助手找延伸阅读";
-      ask.title = ready
-        ? "让配好的模型找几条延伸阅读（后端会验证链接能不能打开）"
-        : "本机后端没在跑 / 还没配模型，先到设置页把助手配上";
+      ask.disabled = !canAsk;
+      ask.textContent = items.length > 0 ? "换一批资料" : "让助手找延伸阅读";
+      ask.title = canAsk
+        ? "让助手按标题找几条资料（每条都会先验证能不能打开）"
+        : "还没配上助手 —— 到设置页填一下模型接口和密钥";
     }
     if (note) {
       note.textContent =
         items.length > 0
-          ? config.note || "都是公开文档，点开是新窗口。"
-          : config.empty || "这里还没有可推荐的资料。";
+          ? config.note || "助手找的，链接都验证过打得开，点开是新窗口。"
+          : canAsk
+            ? "正在让助手找…"
+            : config.empty || "还没有资料。到设置页把助手配上，就能让它按题目找资料（每条都会先验证能不能打开）。";
     }
     fillLinkList(items);
 
@@ -1244,6 +1106,7 @@
     overlay.dataset.taskId = config.taskId || "";
     const focusTarget = overlay.querySelector(".task-link-close");
     if (focusTarget && typeof focusTarget.focus === "function") focusTarget.focus();
+    if (config.auto && canAsk) askLinkList();
     return true;
   }
 
@@ -1274,8 +1137,8 @@
       return;
     }
     fillLinkList(answer.links);
-    if (ask) ask.textContent = "让助手再找几条";
-    if (note) note.textContent = "助手找的（链接都验证过打得开），点开是新窗口。";
+    if (ask) ask.textContent = "换一批资料";
+    if (note) note.textContent = "助手找的，链接都验证过打得开，点开是新窗口。";
     if (context.taskId) {
       const task = store.tasks.concat(store.trash).find((item) => item.id === context.taskId);
       if (task) {
@@ -1611,22 +1474,17 @@
     }
   }
 
-  // 本地兜底：先按兴趣点去文档目录里挑，挑不到就按日期取一个。
+  // 本地兜底：从内置的知识点清单里挑一个（资料留给助手找，这儿不硬塞）。
   function localDaily(dateKey) {
     const mine = pickInterestList();
     // 没自己挑过兴趣就是「随机推」：按当前方向这一个宽泛方向挑
     const focus = mine.length > 0 ? mine.join(" ") : directionTheme();
-    let links = focus ? matchArticles(focus, LINK_LIMIT) : [];
-    let title = links.length > 0 ? links[0].title : "";
-    if (!title) {
-      title = KNOWLEDGE_POINTS[dayOfYear() % KNOWLEDGE_POINTS.length];
-      links = matchArticles(title, LINK_LIMIT);
-    }
+    const title = KNOWLEDGE_POINTS[dayOfYear() % KNOWLEDGE_POINTS.length];
     return {
       date: dateKey,
       title: title,
       brief: "",
-      links: links,
+      links: [],
       source: "local",
       interest: mine.length > 0 ? mine.join("、") : focus
     };
@@ -1679,7 +1537,6 @@
   function dailySystemPrompt(exclude) {
     const mine = pickInterestList();
     const theme = mine.length > 0 ? "" : directionTheme();
-    const catalog = ARTICLE_SOURCES.map((entry) => "- " + entry.title + "  " + entry.url).join("\n");
     const lines = [
       "你在给一个自学的人挑今天要了解的知识点。",
       "今天是 " + todayKey() + "。",
@@ -1688,9 +1545,7 @@
         : "他还没定兴趣方向，这一轮想看看「" + theme + "」这一带的东西，别跑太远。",
       "挑一个具体、能动手、看完有收获的点，别挑太泛或没什么意义的大词。",
       "只输出一个 JSON 对象，不要解释，也不要用代码块：",
-      '{"title": "知识点，12 字以内", "brief": "一句话说明它解决什么问题", "links": [{"title": "资料名", "url": "https://..."}]}',
-      "links 只能从下面目录里挑 0-2 条，url 原样照抄，不要自己编：",
-      catalog
+      '{"title": "知识点，12 字以内", "brief": "一句话说明它解决什么问题"}'
     ];
     const banned = Array.isArray(exclude) ? exclude.filter(Boolean) : [];
     if (banned.length > 0) {
@@ -1785,7 +1640,7 @@
     const title = pool.length > 0
       ? pool[Math.floor(Math.random() * pool.length)]
       : KNOWLEDGE_POINTS[dayOfYear() % KNOWLEDGE_POINTS.length];
-    return { title: title, brief: "", links: matchArticles(title, LINK_LIMIT), source: "local" };
+    return { title: title, brief: "", links: [], source: "local" };
   }
 
   function setDailyStatus(text) {
@@ -2907,7 +2762,6 @@
     const weekday = "日一二三四五六"[new Date().getDay()];
     const names = categories();
     const existing = store.tasks.map((task) => task.title).slice(0, 60);
-    const catalog = ARTICLE_SOURCES.map((entry) => "- " + entry.title + "  " + entry.url).join("\n");
     return [
       "你是一个任务规划助手，把用户说的话拆成可执行的任务。",
       "今天是 " + today + "（星期" + weekday + "）。",
@@ -2916,10 +2770,8 @@
       "date 用 YYYY-MM-DD，只在确实和日期有关时才给，今天就是 " + today + "；不确定就省略这个字段。",
       "已经有这些任务，不要重复添加：" + (existing.length > 0 ? existing.join("；") : "（还没有）"),
       "如果用户是在问问题（例如今天有什么任务、这周该怎么安排），就把回答写进 reply，不要凭空造任务。",
-      "如果任务是学某个知识点，或者用户让你找资料、推荐文章，就给这个任务挑 1-3 条延伸阅读，只能从下面这份目录里选，url 原样照抄，不要自己编：",
-      catalog,
-      "如果目录里没有对得上的，links 就给空数组。",
-      '只输出一个 JSON 对象，不要写解释，也不要用 markdown 代码块。格式是：{"reply": "给用户看的一两句话", "tasks": [{"title": "任务标题", "category": "分类", "urgency": "normal", "date": "YYYY-MM-DD", "links": [{"title": "文档名", "url": "https://..."}]}]}',
+      "不要给资料链接：阅读资料由界面上的「延伸阅读」按标题现找（那边会验证链接能不能打开），links 一律给空数组。",
+      '只输出一个 JSON 对象，不要写解释，也不要用 markdown 代码块。格式是：{"reply": "给用户看的一两句话", "tasks": [{"title": "任务标题", "category": "分类", "urgency": "normal", "date": "YYYY-MM-DD", "links": []}]}',
       "没有新任务时 tasks 就是空数组。"
     ].join("\n");
   }
@@ -3779,7 +3631,6 @@
       const task = store.tasks.concat(store.trash).find((item) => item.id === id);
       return task ? linksForTask(task) : [];
     },
-    matchArticles: matchArticles,
     openLinks: function (id) {
       const task = store.tasks.concat(store.trash).find((item) => item.id === id);
       return openLinkDialog(task);
@@ -3788,9 +3639,6 @@
     linksOpen: linkDialogOpen,
     openLinkList: function (title, links, options) {
       return openLinkList(title, links, options);
-    },
-    articleSources: function () {
-      return ARTICLE_SOURCES.map((entry) => ({ title: entry.title, url: entry.url }));
     },
     refresh: renderAll,
     goals: function () {
