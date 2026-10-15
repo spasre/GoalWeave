@@ -2286,12 +2286,59 @@ html { overflow-x: clip; }
 
 .goal-outline-fold > summary:hover { color: var(--brand); }
 
-/* 第一次排期：时间段在这儿就地改 */
-.segment-setup { display: grid; gap: 8px; }
+/* 第一次排期：时间段在这儿就地改 */.segment-setup { display: grid; gap: 8px; }
 
 .segment-setup-row { display: flex; gap: 8px; }
 
 .segment-setup-row .task-input { flex: 1; min-width: 0; }
+
+/* 节点编辑器：一行一个知识点，下面那排是它的前置（＝ 图上的边） */
+.node-edit { display: grid; gap: 10px; }
+
+.node-edit-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+}
+
+.node-edit-main { display: flex; align-items: center; gap: 8px; }
+
+.node-edit-main .task-input { flex: 1; min-width: 0; }
+
+.node-edit-num { flex: 0 0 auto; width: 20px; color: var(--muted); font-size: 12px; text-align: right; }
+
+.node-edit-deps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.node-edit-label { color: var(--muted); font-size: 12px; }
+
+.node-dep-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--soft-ink);
+  font-size: 12px;
+}
+
+.node-dep-cut {
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.node-dep-cut:hover { color: var(--danger); }
+
+.node-dep-add { flex: 0 0 auto; width: auto; max-width: 240px; font-size: 12px; }
 
 .sched-undo {
   display: flex;

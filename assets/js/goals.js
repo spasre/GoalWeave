@@ -607,6 +607,203 @@
   /* ---------- 渲染 ---------- */
 
 
+  /* ---------- 节点与依赖：就地加删知识点、连断前置（边） ---------- */
+
+  function nodeSeed() {
+    return "n" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+  }
+
+  // 改知识点（节点）和前置（边）：保存后大纲、任务、学习路线图一起更新；
+  // 已经排好的时间不动（sanitizeNodes 不认 slot/hours，所以按 id 收回来）。
+  function openNodeEditor(goalId) {
+    const goal = api.goal(goalId);
+    if (!goal) return;
+    const sheet = api.openSheet("改「" + goal.title + "」的知识点与前置", { wide: true });
+    const draft = (goal.nodes || []).map((node) => ({
+      id: node.id,
+      title: node.title,
+      brief: node.brief || "",
+      links: (node.links || []).slice(),
+      done: Boolean(node.done),
+      date: node.date || "",
+      slot: node.slot || "",
+      hours: Number(node.hours) || 0,
+      deps: (node.deps || []).slice()
+    }));
+
+    sheet.body.append(
+      el("p", "task-hint", "一行一个知识点：改名字、连前置（＝ 图上的那条边：先学谁再学谁）、删掉。保存之后大纲、任务、路线图一起更新；已经排好的时间不动。")
+    );
+
+    const list = el("div", "node-edit");
+    const status = el("p", "task-hint");
+    const foot = el("div", "task-actions-cell");
+    sheet.body.append(list, status, foot);
+
+    function titleOf(id) {
+      const node = draft.find((item) => item.id === id);
+      return node ? node.title : id;
+    }
+
+    function render() {
+      list.replaceChildren();
+      if (draft.length === 0) {
+        list.append(el("p", "task-empty", "知识点都删光了 —— 加一个再保存。"));
+      }
+      draft.forEach((node, index) => {
+        const row = el("div", "node-edit-row");
+
+        const main = el("div", "node-edit-main");
+        main.append(el("span", "node-edit-num", String(index + 1)));
+        const title = document.createElement("input");
+        title.className = "task-input";
+        title.value = node.title;
+        title.placeholder = "知识点名称";
+        title.setAttribute("aria-label", "第 " + (index + 1) + " 个知识点的名称");
+        title.addEventListener("input", () => {
+          node.title = title.value;
+        });
+        main.append(title);
+        if (node.done) main.append(el("span", "node-hint", "已完成"));
+        const remove = el("button", "task-action task-action-danger", "删");
+        remove.type = "button";
+        remove.title = "删掉这个知识点，连着它的前置也一起断掉";
+        remove.addEventListener("click", () => {
+          draft.splice(index, 1);
+          draft.forEach((item) => {
+            item.deps = item.deps.filter((dep) => dep !== node.id);
+          });
+          render();
+        });
+        main.append(remove);
+        row.append(main);
+
+        const deps = el("div", "node-edit-deps");
+        deps.append(el("span", "node-edit-label", "前置"));
+        if (node.deps.length === 0) deps.append(el("span", "node-hint", "没有（最先学这个）"));
+        node.deps.forEach((dep) => {
+          const chip = el("span", "node-dep-chip");
+          chip.append(el("span", null, titleOf(dep)));
+          const cut = el("button", "node-dep-cut", "✕");
+          cut.type = "button";
+          cut.title = "断掉这条边（不再要求先学它）";
+          cut.setAttribute("aria-label", "去掉前置 " + titleOf(dep));
+          cut.addEventListener("click", () => {
+            node.deps = node.deps.filter((item) => item !== dep);
+            render();
+          });
+          chip.append(cut);
+          deps.append(chip);
+        });
+
+        const options = draft.filter((item) => item.id !== node.id && node.deps.indexOf(item.id) < 0);
+        if (options.length > 0) {
+          const pick = document.createElement("select");
+          pick.className = "task-select node-dep-add";
+          const blank = document.createElement("option");
+          blank.value = "";
+          blank.textContent = "＋ 连一个前置…";
+          pick.append(blank);
+          options.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item.id;
+            option.textContent = item.title;
+            pick.append(option);
+          });
+          pick.addEventListener("change", () => {
+            if (!pick.value) return;
+            node.deps.push(pick.value);
+            render();
+          });
+          deps.append(pick);
+        }
+        row.append(deps);
+        list.append(row);
+      });
+    }
+
+    const add = el("button", "task-action", "＋ 添加知识点");
+    add.type = "button";
+    add.addEventListener("click", () => {
+      draft.push({ id: nodeSeed(), title: "", brief: "", links: [], done: false, date: "", slot: "", hours: 0, deps: [] });
+      render();
+      const inputs = list.querySelectorAll("input.task-input");
+      if (inputs.length > 0) inputs[inputs.length - 1].focus();
+    });
+
+    const cancel = el("button", "task-action", "取消");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => sheet.close());
+
+    const save = el("button", "task-action sched-save", "保存并重画路线图");
+    save.type = "button";
+    save.addEventListener("click", () => saveNodes());
+
+    foot.append(add, cancel, save);
+
+    function saveNodes() {
+      const cleaned = draft
+        .filter((node) => String(node.title || "").trim())
+        .map((node) => Object.assign({}, node, { title: String(node.title).trim() }));
+      if (cleaned.length === 0) {
+        status.textContent = "至少留一个知识点。";
+        return;
+      }
+      const ids = new Set(cleaned.map((node) => node.id));
+      cleaned.forEach((node) => {
+        node.deps = (node.deps || []).filter((dep) => ids.has(dep) && dep !== node.id);
+      });
+      const before = JSON.stringify(cleaned.map((node) => [node.title, node.deps]));
+      const safe = sanitizeNodes(cleaned);   // 顺手断掉绕圈的依赖、去掉指向不存在节点的边
+      // sanitizeNodes 不认 slot / hours：按 id 收回来，免得已经排好的时间被当成「没排过」
+      const keep = new Map(cleaned.map((node) => [node.id, node]));
+      const placed = new Set();
+      safe.forEach((node) => {
+        const old = keep.get(node.id);
+        if (!old) return;
+        node.slot = old.slot;
+        node.hours = old.hours;
+        if (old.date) node.date = old.date;
+        if (!node.brief && old.brief) node.brief = old.brief;
+        if ((!node.links || node.links.length === 0) && old.links) node.links = old.links;
+        if (node.date && node.slot) placed.add(node.id);
+      });
+      api.updateGoal(goal.id, { nodes: safe, outline: outlineText(goal.title, safe, metaOf(goal)) });
+      api.syncGoalTasks(goal.id);
+      renderGoals();
+      status.textContent = (before === JSON.stringify(safe.map((node) => [node.title, node.deps]))
+        ? "存好了。"
+        : "存好了（绕圈的依赖已经自动断掉）。") + (placed.size > 0 ? " " + placed.size + " 个已经排好的时间没动。" : "");
+      redraw(goal.id);
+    }
+
+    async function redraw(id) {
+      const target = api.goal(id);
+      if (!target) return;
+      save.disabled = true;
+      status.textContent += " 正在按新节点重画路线图…";
+      const drawing = await drawRoadmap(target.title, target.nodes || []);
+      save.disabled = false;
+      if (drawing.ok) {
+        api.updateGoal(id, { diagram: drawing.url });
+        renderGoals();
+        status.textContent = "路线图也重画好了。";
+        return;
+      }
+      // 画不出来就把旧图撤掉（它跟现在的节点对不上），并给一个重试入口
+      api.updateGoal(id, { diagram: "" });
+      renderGoals();
+      status.replaceChildren();
+      status.append(el("span", null, "存好了，但路线图没重画成功：" + (drawing.error || "后端没在跑，或者 Archify 没过校验") + " "));
+      const retry = el("button", "task-action", "再试一次");
+      retry.type = "button";
+      retry.addEventListener("click", () => redraw(id));
+      status.append(retry);
+    }
+
+    render();
+  }
+
   function goalCard(goal, reusedBox) {
     const nodes = goal.nodes || [];
     const done = nodes.filter((node) => node.done).length;
@@ -636,6 +833,12 @@
     sync.dataset.id = goal.id;
     sync.title = "把还没排期的知识点排进日程表，并补上对应的任务";
     actions.append(sync);
+    const editNodes = el("button", "task-action", "改节点");
+    editNodes.type = "button";
+    editNodes.dataset.action = "goal-nodes";
+    editNodes.dataset.id = goal.id;
+    editNodes.title = "加 / 删知识点，连 / 断前置（边）；保存后路线图会重画";
+    actions.append(editNodes);
     if (goal.diagram) {
       const folded = state.diagramClosed.indexOf(goal.id) >= 0;
       const diagram = el("button", "task-action", folded ? "展开路线图" : "收起路线图");
@@ -3020,6 +3223,11 @@
 
     if (action === "goal-plan") {
       planGoal(id);
+      return;
+    }
+
+    if (action === "goal-nodes") {
+      openNodeEditor(id);
       return;
     }
 
