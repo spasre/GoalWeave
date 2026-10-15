@@ -2479,8 +2479,6 @@ html { overflow-x: clip; }
 
 .day-seg-empty:disabled { cursor: default; }
 
-.day-seg-free { align-self: flex-start; font-size: 12px; }
-
 /* 日视图里复用周视图的块，把那层「格子」外皮收掉 */
 .day-seg .sched-cell.is-inline {
   height: auto;

@@ -554,7 +554,7 @@
     if (!goal) return null;
     setStatus("正在排「" + goal.title + "」的学习计划…");
     const result = await generateNodes(goal);
-    // 知识点换了，旧图作废：顺手重新画一张
+    // 换了知识点，旧图作废：顺手重新画一张
     const drawing = await drawRoadmap(goal.title, result.nodes);
     const saved = api.updateGoal(goalId, {
       nodes: result.nodes,
@@ -562,8 +562,16 @@
       planNote: result.note,
       diagram: drawing.ok ? drawing.url : ""
     });
-    // 换了知识点也先不排期：想让它进日程表就点「同步」
-    setStatus("计划生成好了：" + result.nodes.length + " 个知识点。点「同步」把它们排进日程表。");
+    // 计划一次生成好一整份（排进空段）：到日程表上看着改，比一个个拖省事
+    setStatus("计划生成好了：" + result.nodes.length + " 个知识点，正在排进日程表…");
+    placeGoalPlan(goalId, (plan) => {
+      setStatus(
+        "计划生成好了：" + result.nodes.length + " 个知识点" +
+          (plan && plan.placed > 0 ? "，已经排进日程表" : "") +
+          (plan && plan.missed > 0 ? "（有 " + plan.missed + " 个这几天没空位，放开一些时间再同步）" : "") +
+          "。到日程表上看着改就行。"
+      );
+    });
     return saved;
   }
 
@@ -1348,7 +1356,7 @@
       el("p", "task-hint", "一天切成几段，知识点只会往这些段里塞。下面是现在的分段，按自己的作息改就行（一段接一段，前一段的结束不能晚于后一段的开始）。")
     );
 
-    const rows = api.segments().map((seg) => ({ start: seg.start, end: seg.end }));
+    const rows = api.segments().map((seg) => ({ key: seg.key, start: seg.start, end: seg.end }));
     const list = el("div", "segment-setup");
     const warn = el("p", "task-hint sched-edit-note");
     const start = el("button", "task-action sched-save", "保存并开始排期");
@@ -1440,11 +1448,25 @@
   }
 
   // 点卡片上的「同步」：把还没排期的知识点排进日程表（第一次先请用户把时间段定一下）
+  // 把某个目标还没排期的知识点一次排进空段（第一次会先请你把时间段 / 非空闲定一下）。
+  // 返回值：排好了给 plan，需要先设置时间段就给 null（设置面板关掉后会接着调 onDone）。
+  function placeGoalPlan(goalId, onDone) {
+    const run = () => {
+      const plan = planSchedule({ only: goalId });
+      if (typeof onDone === "function") onDone(plan);
+      return plan;
+    };
+    if (!api.planSetupDone()) {
+      openPlanSetup(run);
+      return null;
+    }
+    return run();
+  }
+
   function syncGoal(goalId) {
     const goal = api.goal(goalId);
     if (!goal) return;
-    const run = () => {
-      const plan = planSchedule({ only: goalId });
+    placeGoalPlan(goalId, (plan) => {
       const queued = api.goalTasks(goalId).length;
       setStatus(
         "「" + goal.title + "」同步好了：" +
@@ -1453,12 +1475,7 @@
           (plan.missed > 0 ? "；有 " + plan.missed + " 个这几天没空位，放开一些时间再同步" : "") +
           "。"
       );
-    };
-    if (!api.planSetupDone()) {
-      openPlanSetup(run);
-      return;
-    }
-    run();
+    });
   }
 
   // 重新规划：没做完的都腾出来重新找位置（做完的、已经过去的保持不动），可以撤销
@@ -1696,6 +1713,13 @@
   function renderScheduleTray() {
     const box = document.getElementById("sched-tray");
     if (!box) return;
+    // 待安排只在周视图里露头：安排任务就在那张周表上做（拖进格子 / 点一下挑时间），
+    // 日、月视图纯粹是「看」，别把待安排堆在那儿挡视线。
+    if (sched.view !== "week") {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
     const nodes = [];
     api.goals().forEach((goal) => {
       (goal.nodes || []).forEach((node) => {
@@ -1881,22 +1905,17 @@
       if (cell.length > 0) {
         block.append(scheduleCell(date, seg, cell, busy, past, false, true));
       } else {
-        const empty = el("button", "day-seg-empty", busy ? "非空闲（点一下放开）" : "空着 —— 从上面的待安排拖进来");
+        // 点一下就是「每周这一天的这一段都算忙」，再点一下放开 —— 一个按钮就够，别摆两个
+        const empty = el("button", "day-seg-empty", busy ? "非空闲（点一下放开）" : "空着（点一下设为非空闲）");
         empty.type = "button";
         empty.dataset.action = "sched-busy";
         empty.dataset.date = date;
         empty.dataset.slot = seg.key;
         empty.disabled = past;
+        empty.title = past ? "这段时间已经过去了" : busy ? "恢复成空闲" : "把每周这一天的这一段都设为非空闲";
+        empty.setAttribute("aria-label", empty.title);
         if (past) empty.textContent = "这段时间已经过去了";
         block.append(empty);
-        if (busy && !past) {
-          const free = el("button", "task-action day-seg-free", "恢复成空闲");
-          free.type = "button";
-          free.dataset.action = "sched-busy";
-          free.dataset.date = date;
-          free.dataset.slot = seg.key;
-          block.append(free);
-        }
       }
       track.append(block);
     });
@@ -2826,13 +2845,18 @@
       outline: outlineText(goal.title, nodes, metaOf(goal))
     });
     closeWizard();
-    // 还没排期的直接去日程表：在那儿拖时间，或者按「重新规划」整体排一遍
+    // 计划先生成好一整份（按空段排进去），再到日程表上看着改 —— 不用一个个拖
     const pending = nodes.filter((node) => !node.date || !node.slot).length;
-    if (pending > 0) {
-      goAfterFlush("schedule.html");
+    if (pending === 0) {
+      setStatus("「" + goal.title + "」：" + nodes.length + " 个知识点，都排好了。");
       return;
     }
-    setStatus("「" + goal.title + "」：" + nodes.length + " 个知识点，都排好了。");
+    placeGoalPlan(goal.id, (plan) => {
+      if (plan && plan.missed > 0) {
+        setStatus("「" + goal.title + "」排好了 " + plan.placed + " 个，还有 " + plan.missed + " 个这几天没空位 —— 到日程表上放开一些时间，再按「重新规划」。");
+      }
+      goAfterFlush("schedule.html");
+    });
   }
 
   // 把一张画好的学习路线图摆进向导（不重新生成）

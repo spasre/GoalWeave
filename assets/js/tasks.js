@@ -215,7 +215,13 @@
       const start = clockMinutes(item.start);
       const end = clockMinutes(item.end);
       if (start < 0 || end < 0 || end <= start) return;
-      const key = String(item.key || "").trim() || "seg" + (index + 1);
+      // 没给 key 的（新加的一段）编一个不撞车的：撞上了上面的查重会把这行整条丢掉
+      let key = String(item.key || "").trim();
+      if (!key) {
+        let serial = index + 1;
+        while (valid.some((seg) => seg.key === "seg" + serial)) serial += 1;
+        key = "seg" + serial;
+      }
       if (valid.some((seg) => seg.key === key)) return;
       valid.push({
         key: key,
