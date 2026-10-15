@@ -330,6 +330,31 @@
 
   let store = load();
 
+  // 清空看板：任务 / 回收站 / 目标 / 日程 / 聊天 / 兴趣 / 设置全回到出厂状态，回到「新用户」，
+  // 下次打开页面引导会重新弹（onboarded 又变回 false）。
+  // 助手配置（本机 .env 里那份接口地址和密钥）不动 —— 那是配置不是数据，
+  // 清完 backend.js 会把后端存着的配置拉回设置里。
+  async function resetData() {
+    [
+      STORE_KEY,               // 本地兜底那份看板
+      "spasre-sched-draft",    // 时间段改了没保存的草稿（goals.js）
+      "spasre-sched-week",     // 日程表在看哪一周（goals.js）
+      BOARD_VIEW_KEY           // 任务页的筛选（本文件）
+    ].forEach((key) => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch (error) {
+        // 存不进去就算了，别让清空失败
+      }
+    });
+    store = emptyStore();
+    state.board = { view: "active", category: "all", urgency: "all", scope: "all", editingId: "" };
+    save();
+    renderAll();
+    await flushRemote();       // 后端那份也得清掉，否则刷新之后又拉回来了
+    return true;
+  }
+
   /* ---------- 后端存储：所有浏览器共用同一份 ---------- */
 
   let remoteSaveTimer = 0;
@@ -3302,6 +3327,7 @@
     },
     dropTodayDaily: dropTodayDaily,
     flush: flushRemote,
+    resetData: resetData,
     // 跳过兴趣标签之后，按「学完的每日任务」推方向（换掉的不算）
     inferInterests: inferInterestsFromDaily,
     learnedDaily: learnedDailyTitles,

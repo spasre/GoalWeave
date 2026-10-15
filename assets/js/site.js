@@ -1,9 +1,6 @@
 (function () {
   const root = document.documentElement;
   const themeToggle = document.querySelector(".theme-toggle");
-  const autoIcon = document.querySelector(".auto-icon");
-  const moonIcon = document.querySelector(".moon-icon");
-  const sunIcon = document.querySelector(".sun-icon");
   const themeColor = document.querySelector('meta[name="theme-color"]');
 
   function isDarkTheme() {
@@ -24,9 +21,7 @@
     themeToggle.setAttribute("aria-pressed", String(dark));
     themeToggle.setAttribute("aria-label", label);
     themeToggle.title = label;
-    autoIcon.hidden = mode !== "auto";
-    moonIcon.hidden = mode !== "dark";
-    sunIcon.hidden = mode !== "light";
+    // 图标由 CSS 按 data-theme 挑（见 style.css），这里只管标签和提示
     themeColor.content = dark ? "#121620" : "#f6f7fb";
   }
 

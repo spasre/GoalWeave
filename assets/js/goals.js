@@ -1215,6 +1215,10 @@
     }, 60000);
   }
 
+  // 进入某一周时把「今天」那一列拉到最左边：窄屏下七列放不下，
+  // 停在周一的话一进来就是半屏灰格子（过去的日子），今天反而在屏幕外
+  let schedAlignedWeek = null;
+
   function renderScheduleTable() {
     const wrap = document.getElementById("sched-wrap");
     if (!wrap) return;
@@ -1266,7 +1270,24 @@
       body.append(row);
     });
     table.append(body);
+    const keepLeft = wrap.scrollLeft;          // 重画别把用户自己滚到的地方弹回去
+    const weekChanged = schedAlignedWeek !== sched.weekStart;
     wrap.replaceChildren(table);
+    let left = keepLeft;
+    if (weekChanged) {
+      // 今天是几号就把它贴到最左边（靠左那列时间标签是 sticky 的，会一直露着）
+      const slot = table.querySelector("th.sched-slot");
+      const todayHead = table.querySelector("th.is-today");
+      const slotWidth = slot ? slot.getBoundingClientRect().width : 0;
+      left = 0;
+      if (todayHead) {
+        const gap = todayHead.getBoundingClientRect().left - wrap.getBoundingClientRect().left;
+        left = wrap.scrollLeft + gap - slotWidth;
+      }
+      schedAlignedWeek = sched.weekStart;
+    }
+    const maxLeft = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+    wrap.scrollLeft = Math.max(0, Math.min(left, maxLeft));
   }
 
   function pickedNode() {

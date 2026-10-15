@@ -153,4 +153,86 @@
   lastTagsKey = currentTags().join("|");
   suggest(lastTagsKey ? "related" : "preset");
 
+  /* ---------- 清空数据：把「确认清空数据」打一遍才放行，清完回首页走引导 ---------- */
+
+  const WIPE_WORD = "确认清空数据";
+
+  function note(text) {
+    const p = document.createElement("p");
+    p.className = "task-hint";
+    p.textContent = text;
+    return p;
+  }
+
+  function actionButton(text, cls, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = cls || "task-action";
+    button.textContent = text;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function openWipeSheet() {
+    const sheet = api.openSheet("清空数据");
+    sheet.body.append(
+      note("会把任务、回收站、长期目标与知识点、日程、聊天记录、兴趣标签、每日推荐全部删掉，后端那份也一起清 —— 这一步没法撤销。"),
+      note("助手里的接口地址和密钥（本机 .env）会留着，那是配置不是数据。清完会重新走一遍新用户引导。"),
+      note("想继续，就把这句话原样打一遍：" + WIPE_WORD)
+    );
+
+    const field = document.createElement("label");
+    field.className = "task-field";
+    const caption = document.createElement("span");
+    caption.textContent = "确认文字";
+    const input = document.createElement("input");
+    input.className = "task-input";
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = WIPE_WORD;
+    field.append(caption, input);
+    sheet.body.append(field);
+
+    const status = document.createElement("p");
+    status.className = "task-hint";
+    status.setAttribute("role", "status");
+
+    const confirm = actionButton("清空数据", "task-action task-action-danger", wipe);
+    confirm.disabled = true;
+    const foot = document.createElement("div");
+    foot.className = "task-actions-cell";
+    foot.append(actionButton("取消", "task-action", () => sheet.close()), confirm);
+    sheet.body.append(status, foot);
+
+    input.addEventListener("input", () => {
+      confirm.disabled = input.value.trim() !== WIPE_WORD;
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return; // 中文输入法组字时的回车不算
+      event.preventDefault();
+      if (!confirm.disabled) wipe();
+    });
+    input.focus();
+
+    async function wipe() {
+      confirm.disabled = true;
+      confirm.textContent = "正在清空…";
+      status.textContent = "清空之后会跳到首页，重新走一遍新用户引导。";
+      try {
+        await api.resetData();
+      } catch (error) {
+        status.textContent = "清空没成功，再试一次：" + (error && error.message ? error.message : error);
+        confirm.textContent = "清空数据";
+        confirm.disabled = input.value.trim() !== WIPE_WORD;
+        return;
+      }
+      // 清空已经推给后端了（resetData 里 flush 过），可以直接跳
+      window.location.href = "index.html";
+    }
+  }
+
+  const wipeButton = field("wipe-data");
+  if (wipeButton) wipeButton.addEventListener("click", openWipeSheet);
+
 })();

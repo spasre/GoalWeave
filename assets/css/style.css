@@ -365,6 +365,22 @@ a:focus-visible, button:focus-visible, input:focus-visible {
   box-shadow: 0 0 0 4px var(--toggle-glow);
 }
 
+/* 三档各配一个图标，只显示当前那一档。
+   注意：图标是 <svg>，SVG 元素上没有 hidden 属性（写 svg.hidden = true 是无效的），
+   所以这里按「有没有 data-theme」来挑：没写 data-theme 就是跟随系统。
+   data-theme 在 head 里那段内联脚本就先落好了，所以首屏不会闪。 */
+.theme-toggle svg { display: none; }
+
+.theme-toggle .auto-icon { display: block; }
+
+:root[data-theme="light"] .theme-toggle .auto-icon { display: none; }
+
+:root[data-theme="light"] .theme-toggle .sun-icon { display: block; }
+
+:root[data-theme="dark"] .theme-toggle .auto-icon { display: none; }
+
+:root[data-theme="dark"] .theme-toggle .moon-icon { display: block; }
+
 /* Headings and shared blocks */
 
 h1, h2, h3 {
@@ -1927,6 +1943,10 @@ html { overflow-x: clip; }
 .sched-table th.is-today { color: var(--sakura); }
 
 .sched-table th.sched-slot { width: 100px; padding: 0 6px 0 0; text-align: right; }
+
+/* 时间标签那列横向滚动时固定在最左边：把「今天」拉到最左之后，还得能看见每行是几点
+   （box-shadow 跟底色同色，用来盖住 border-spacing 留出的那条缝） */
+.sched-table th.sched-slot { position: sticky; left: 0; z-index: 2; background: var(--paper); box-shadow: 4px 0 0 var(--paper); }
 
 /* 行首的时间标签：点它就是「改这一段的开始 / 结束」 */
 .sched-seg {
