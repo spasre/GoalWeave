@@ -837,9 +837,12 @@ h1 {
   height: 9px;
   flex: none;
   border-radius: 50%;
-  background: var(--leaf);
+  background: var(--line);
   box-shadow: 0 0 0 4px var(--field);
 }
+
+/* 已连接：绿灯 */
+.task-agent-dot.is-on { background: var(--teal); }
 .task-agent-card-title { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
 .task-agent-card-detail { margin: 3px 0 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 
@@ -1426,6 +1429,11 @@ html { overflow-x: clip; }
 .task-link:hover, .task-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
 
 .task-link-host { color: var(--muted); font-size: 11px; }
+
+/* 「让助手找延伸阅读」：列表下面那一行 */
+.task-link-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 0; }
+
+.task-link-foot button[hidden] { display: none; }
 
 /* ---------- 长期目标 / 知识点图 ---------- */
 

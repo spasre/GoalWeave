@@ -1118,6 +1118,31 @@
     return matchArticles(String(task.title || "") + " " + String(task.category || ""), LINK_LIMIT);
   }
 
+  /* ---------- 延伸阅读：内置目录不够就让助手找（reading.suggest） ---------- */
+
+  // 让后端的模型找几条：它会顺手真去请求每个地址，打不开的不会回来，所以编的链接骗不过去。
+  async function askReadingLinks(title, context) {
+    const bridge = window.spasreBackend;
+    if (!bridge || typeof bridge.run !== "function" || !bridge.online) {
+      return { ok: false, error: "本机后端没在跑，没法让助手找。" };
+    }
+    const info = context || {};
+    try {
+      const payload = await bridge.run("reading.suggest", {
+        title: String(title || ""),
+        brief: String(info.brief || ""),
+        category: String(info.category || ""),
+        limit: LINK_LIMIT
+      });
+      const result = (payload && payload.result) || null;
+      if (!result) return { ok: false, error: "后端没回话。" };
+      if (!result.ok) return { ok: false, error: String(result.error || "没找着。") };
+      return { ok: true, links: normalizeLinks(result.links) };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  }
+
   /* ---------- 推荐阅读弹窗 ---------- */
 
   let linkDialog = null;
@@ -1148,8 +1173,15 @@
     const list = el("ul", "task-link-list");
     list.dataset.role = "link-list";
 
-    panel.append(head, note, list);
+    const foot = el("div", "task-link-foot");
+    const ask = el("button", "task-action", "让助手找延伸阅读");
+    ask.type = "button";
+    ask.dataset.role = "link-ask";
+    foot.append(ask);
+
+    panel.append(head, note, list, foot);
     overlay.append(panel);
+    ask.addEventListener("click", () => askLinkList());
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay || event.target.closest("[data-role=link-close]")) closeLinkDialog();
     });
@@ -1163,8 +1195,10 @@
     if (!task) return false;
     const links = linksForTask(task);
     return openLinkList(task.title, links, {
-      empty: "没找到对得上的延伸阅读。标题写具体一点，或者填上模型接口让助手来找。",
-      taskId: task.id
+      empty: "这份目录里没有对得上的 —— 点下面的「让助手找延伸阅读」，让模型去找几条（它会先验证链接能不能打开）。",
+      taskId: task.id,
+      brief: task.brief,
+      category: task.category
     });
   }
 
@@ -1175,29 +1209,35 @@
     const heading = overlay.querySelector("#task-link-dialog-title");
     const note = overlay.querySelector("[data-role=link-note]");
     const list = overlay.querySelector("[data-role=link-list]");
+    const ask = overlay.querySelector("[data-role=link-ask]");
     const items = normalizeLinks(links);
 
+    // 弹窗是复用的一个，所以这次问的是谁得记下来（异步回来时照着填）
+    linkDialogContext = {
+      title: String(title || ""),
+      taskId: config.taskId || "",
+      brief: config.brief || "",
+      category: config.category || ""
+    };
+    linkAskToken += 1; // 上一次的异步结果作废
+
     if (heading) heading.textContent = String(title || "推荐阅读");
+    if (ask) {
+      const ready = Boolean(window.spasreBackend && window.spasreBackend.online);
+      ask.hidden = config.ask === false;
+      ask.disabled = !ready;
+      ask.textContent = items.length > 0 ? "让助手再找几条" : "让助手找延伸阅读";
+      ask.title = ready
+        ? "让配好的模型找几条延伸阅读（后端会验证链接能不能打开）"
+        : "本机后端没在跑 / 还没配模型，先到设置页把助手配上";
+    }
     if (note) {
       note.textContent =
         items.length > 0
           ? config.note || "都是公开文档，点开是新窗口。"
           : config.empty || "这里还没有可推荐的资料。";
     }
-    if (list) {
-      list.replaceChildren();
-      items.forEach((link) => {
-        const item = el("li", "task-link-item");
-        const anchor = el("a", "task-link", link.title);
-        anchor.href = link.url;
-        anchor.target = "_blank";
-        anchor.rel = "noopener noreferrer";
-        item.append(anchor);
-        const host = link.source || linkHost(link.url);
-        if (host) item.append(el("span", "task-link-host", host));
-        list.append(item);
-      });
-    }
+    fillLinkList(items);
 
     linkDialogReturn = document.activeElement;
     overlay.hidden = false;
@@ -1205,6 +1245,62 @@
     const focusTarget = overlay.querySelector(".task-link-close");
     if (focusTarget && typeof focusTarget.focus === "function") focusTarget.focus();
     return true;
+  }
+
+  // 「让助手找」：转圈期间按钮禁用；回来之后填列表，顺手存回这条任务上（下次直接就有）。
+  let linkDialogContext = { title: "", taskId: "", brief: "", category: "" };
+  let linkAskToken = 0;
+
+  async function askLinkList() {
+    const overlay = linkDialog;
+    if (!overlay) return;
+    const context = linkDialogContext;
+    const token = (linkAskToken += 1);
+    const note = overlay.querySelector("[data-role=link-note]");
+    const ask = overlay.querySelector("[data-role=link-ask]");
+    if (ask) ask.disabled = true;
+    if (note) note.textContent = "正在让助手找 —— 它还会挨个验证链接能不能打开，可能要十几秒…";
+
+    const answer = await askReadingLinks(context.title, context);
+    if (token !== linkAskToken || overlay.hidden) return; // 又点了一次、或者已经关掉了：这次结果作废
+    if (ask) ask.disabled = false;
+
+    if (!answer.ok) {
+      if (note) note.textContent = answer.error + "（也可以把标题写具体一点，再去目录里碰碰运气）";
+      return;
+    }
+    if (answer.links.length === 0) {
+      if (note) note.textContent = "助手没找到能打开的链接 —— 换个更具体的标题或补一句说明，再让它找一次。";
+      return;
+    }
+    fillLinkList(answer.links);
+    if (ask) ask.textContent = "让助手再找几条";
+    if (note) note.textContent = "助手找的（链接都验证过打得开），点开是新窗口。";
+    if (context.taskId) {
+      const task = store.tasks.concat(store.trash).find((item) => item.id === context.taskId);
+      if (task) {
+        task.links = answer.links; // 存下来：下次打开直接显示，不再问模型
+        save();
+        renderAll();
+      }
+    }
+  }
+
+  function fillLinkList(items) {
+    const list = linkDialog ? linkDialog.querySelector("[data-role=link-list]") : null;
+    if (!list) return;
+    list.replaceChildren();
+    (Array.isArray(items) ? items : []).forEach((link) => {
+      const item = el("li", "task-link-item");
+      const anchor = el("a", "task-link", link.title);
+      anchor.href = link.url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      item.append(anchor);
+      const host = link.source || linkHost(link.url);
+      if (host) item.append(el("span", "task-link-host", host));
+      list.append(item);
+    });
   }
 
   function closeLinkDialog() {
@@ -1633,11 +1729,17 @@
     const parsed = extractJson(content);
     const title = parsed && typeof parsed === "object" ? String(parsed.title || "").trim() : "";
     if (!title) return false;
-    const links = normalizeLinks(parsed.links);
+    const brief = String(parsed.brief || "").trim();
+    let links = normalizeLinks(parsed.links);
+    // 目录里没有对得上的（新题目大多如此）：让 reading.suggest 到模型那儿找几条，它会验证链接
+    if (links.length === 0) {
+      const found = await askReadingLinks(title, { brief: brief, category: DAILY_CATEGORY });
+      if (found.ok) links = found.links;
+    }
     store.daily = {
       date: today,
       title: title,
-      brief: String(parsed.brief || "").trim(),
+      brief: brief,
       links: links,
       source: "ai",
       interest: (store.settings.interests || []).join("、")
@@ -1719,7 +1821,14 @@
         const parsed = extractJson(content);
         const title = parsed && typeof parsed === "object" ? String(parsed.title || "").trim() : "";
         if (title && !exclude.includes(title)) {
-          next = { title: title, brief: String(parsed.brief || "").trim(), links: normalizeLinks(parsed.links), source: "ai" };
+          const brief = String(parsed.brief || "").trim();
+          let links = normalizeLinks(parsed.links);
+          // 目录里没有对得上的（新题目大多如此）：让 reading.suggest 到模型那儿找，它会验证链接
+          if (links.length === 0) {
+            const found = await askReadingLinks(title, { brief: brief, category: DAILY_CATEGORY });
+            if (found.ok) links = found.links;
+          }
+          next = { title: title, brief: brief, links: links, source: "ai" };
         }
       } catch (error) {
         console.warn("换一个没成功，先从内置里挑：", error);
@@ -2361,6 +2470,12 @@
 
     const summaryTitle = document.getElementById("agent-summary-title");
     const summaryDetail = document.getElementById("agent-summary-detail");
+    // 连上了就亮个绿灯（没连上是灰的）——一眼能看出助手在不在
+    const summaryDot = summary ? summary.querySelector(".task-agent-dot") : null;
+    if (summaryDot) {
+      summaryDot.classList.toggle("is-on", configured);
+      summaryDot.setAttribute("aria-label", configured ? "助手已连接" : "助手还没配置");
+    }
     if (summaryTitle) {
       const model = String(store.settings.agentModel || "").trim();
       summaryTitle.textContent = configured
