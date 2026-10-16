@@ -361,7 +361,7 @@
       goals: [],
       notes: [],
       settings:Object.assign({}, DEFAULT_SETTINGS, { segments: cleanSegments(null) }),
-      meta: { categories: [], noteCategories: [] },
+      meta: { categories: [], noteCategories: [], dailyServedOn: "" },
       chat: [],
       dailySeen: [],
       daily: null,
@@ -690,7 +690,11 @@
         categories: Array.isArray(parsed.meta && parsed.meta.categories) ? parsed.meta.categories : [],
         noteCategories: Array.isArray(parsed.meta && parsed.meta.noteCategories)
           ? parsed.meta.noteCategories.map((name) => String(name || "").trim()).filter(Boolean).slice(0, 40)
-          : []
+          : [],
+        // 「今天这条每日推荐已经给出去了」的日期。丢了它，刷新一次就会把做完的推荐任务补回来
+        dailyServedOn: /^\d{4}-\d{2}-\d{2}$/.test(String((parsed.meta && parsed.meta.dailyServedOn) || ""))
+          ? String(parsed.meta.dailyServedOn)
+          : ""
       },
       chat: Array.isArray(parsed.chat)
         ? parsed.chat.filter((item) => item && typeof item.text === "string").slice(-CHAT_LIMIT)
@@ -1644,6 +1648,8 @@
     store.trash.unshift(task);
     if (store.trash.length > DAILY_LIMIT) store.trash.length = DAILY_LIMIT;
     if (task.trashReason === "done") setGoalNodeDone(task, true);
+    // 今天这条推荐任务被做掉 / 删掉了：记上「今天已经给过」，刷新之后别再补一条回来
+    if (task.source === "daily" && task.date === todayKey()) store.meta.dailyServedOn = todayKey();
     save();
     return true;
   }
@@ -1656,6 +1662,8 @@
     delete task.trashReason;
     store.tasks.push(task);
     setGoalNodeDone(task, false);
+    // 从回收站捞回来，等于今天这条又回到列表里了，记号保持今天（不该再补一条）
+    if (task.source === "daily" && task.date === todayKey()) store.meta.dailyServedOn = todayKey();
     save();
     return true;
   }
@@ -1728,6 +1736,8 @@
     if (kept.length === store.tasks.length) return false;
     store.tasks = kept;
     if (store.daily && store.daily.date === today) store.daily = null;
+    // 这条是「不要」掉的，不算发出过 —— 之后再把每日推荐打开，今天还能拿到一条
+    if (store.meta.dailyServedOn === today) store.meta.dailyServedOn = "";
     save();
     renderAll();
     return true;
@@ -1742,11 +1752,20 @@
   function ensureDailyRecommendation() {
     if (!dailyReady()) return false;
     const today = todayKey();
+    if (!store.daily || store.daily.date !== today) store.daily = localDaily(today);
     const exists = store.tasks.some(
       (task) => task.category === DAILY_CATEGORY && task.date === today && task.source === "daily"
     );
-    if (exists) return false;
-    if (!store.daily || store.daily.date !== today) store.daily = localDaily(today);
+    if (exists) {
+      // 今天这条已经发出去了，记一笔：等下做完 / 删掉之后别再补一条回来
+      if (store.meta.dailyServedOn !== today) {
+        store.meta.dailyServedOn = today;
+        save();
+      }
+      return false;
+    }
+    // 今天这条早给过了又不在列表里 —— 是用户做完（进了回收站）或不要了，别复活它
+    if (store.meta.dailyServedOn === today) return false;
     const task = {
       id: newId(),
       title: "今日知识点：" + store.daily.title,
@@ -1761,6 +1780,7 @@
     // 勾了「统一排进日程表」就顺手占一个今天的空段（没空位就先不排，别硬塞）
     if (store.settings.dailyAutoSchedule) autoPlaceTask(task, today);
     store.tasks.push(task);
+    store.meta.dailyServedOn = today;
     save();
     return true;
   }
@@ -1938,6 +1958,8 @@
       if ((next.links || []).length > 0) task.links = next.links;
       else delete task.links;
     } else {
+      // 换的是新的一条：今天那条（可能已经做完了）的记号清掉，让它能重新铺一条任务
+      store.meta.dailyServedOn = "";
       ensureDailyRecommendation();
     }
     save();
@@ -2135,6 +2157,15 @@
     card.append(head);
     if (daily.brief) card.append(el("p", "daily-brief", daily.brief));
     if (daily.interest) card.append(el("p", "daily-meta", "兴趣点：" + daily.interest));
+    // 今天这条已经做掉 / 删掉了：说一声，不然卡片看着像还没做（任务也不会再补回来）
+    if (store.meta.dailyServedOn === todayKey() && !store.tasks.some((item) => item.source === "daily" && item.date === todayKey())) {
+      const done = store.trash.some(
+        (item) => item.source === "daily" && item.date === todayKey() && item.trashReason === "done"
+      );
+      const line = el("p", "daily-meta", done ? "今天这条已经做完了。" : "今天这条已经拿掉了。");
+      line.dataset.role = "daily-state";
+      card.append(line);
+    }
 
     const links = Array.isArray(daily.links) ? daily.links : [];
     if (links.length > 0) {

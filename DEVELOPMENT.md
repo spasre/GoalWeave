@@ -232,6 +232,9 @@ await spasreBackend.run("echo", { text: "hi" });
   本地有没推上去的东西，反过来把本地推上去，而不是被旧的那份盖回来。
 - **跳页前把攒着的推送出去**：推送有 400ms 防抖，`pagehide` / `beforeunload` 时用 `navigator.sendBeacon("/api/data", …)`
   兜一下（后端 `/api/data` 收 POST 和 PUT），点完任务立刻切页也不会丢。
+- **能自动生成的东西要自己记住「已经给过了」**：每日推荐每天那条任务放在 `store.daily` + `store.meta.dailyServedOn`
+  里 —— 光看「列表里有没有这条任务」是不够的，用户做完它就进回收站了，下次开页面又会被当成「还没推过」补一条回来
+  （症状：点完完成一刷新，任务自己复活）。凡是这种「ensure 一下」的补全逻辑，都要能区分「还没给」和「给过了、被用掉了」。
 
 ## 控制台接口
 
