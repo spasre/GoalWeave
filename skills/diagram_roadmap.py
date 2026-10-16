@@ -464,11 +464,15 @@ DONE_CSS = """
 # 跟应用里 .month-dot[data-tone=done] 用的是同一个青绿（--teal）
 DONE_COLOR = "#2f6b68"
 
-EXTRAS_CSS = """<style id="roadmap-app-extras">
-  /* 节点点开那块面板是给架构图设计的，学习路线图只留标题和一句说明：
-     「语义护照」这个小标题、种类 / 架构组件 / id 那一排、「N 条出向 · M 条入向」、
-     「编写可达范围 上游/下游」、关系按钮和关系列表、已核验来源 —— 全收掉。
-     应用里还会再注入一份同样的（goals.js 的 decorateDiagramFrame），那是给早先生成好的旧图补的。 */
+"""Archify 那块节点面板是给架构图设计的，学习路线图只留标题和完整说明，
+   底下放一个「笔记」按钮（在应用里打开时 goals.js 还会补上「去日程表看」并把
+   图里截过的说明换成完整的）。右上角只剩关闭：语义护照这个标题、种类 / 架构组件 / id
+   那一排、「N 条出向 · M 条入向」、「编写可达范围 上游/下游」、关系按钮和关系列表、
+   已核验来源 —— 全收掉。
+
+   注：这一段跟应用里 goals.js 的 DIAGRAM_PANEL_CSS 是一对，改一边记得改另一边。
+   这里不用 % 格式化，CSS 里的 100% 会跟旧式格式化打架。"""
+PANEL_CSS = """
   .relationship-lens-eyebrow,
   #focus-passport-meta,
   #focus-summary,
@@ -476,11 +480,32 @@ EXTRAS_CSS = """<style id="roadmap-app-extras">
   #focus-reach,
   #btn-focus-relations,
   #relationship-lens-list { display: none !important; }
-%(done)s</style>"""
+  #focus-chip { width: min(26rem, calc(100% - 2rem)) !important; }
+  .relationship-lens-head { display: block !important; padding: .85rem .9rem .8rem !important; }
+  .relationship-lens-actions { position: absolute !important; top: .45rem !important; right: .45rem !important; }
+  /* 标题和说明都给足地方完整显示（原来都是单行省略号） */
+  .relationship-lens-title { padding-right: 2.1rem !important; overflow: visible !important;
+    white-space: normal !important; text-overflow: clip !important; }
+  .semantic-passport-detail { padding-right: 2.1rem !important; overflow: visible !important;
+    white-space: normal !important; text-overflow: clip !important; }
+  .gw-node-actions { display: flex !important; gap: .5rem !important; margin-top: .8rem !important; }
+  .gw-node-actions button { min-height: 2.2rem !important; padding: 0 .9rem !important;
+    border-radius: .5rem !important; font-size: .72rem !important; font-weight: 600 !important;
+    line-height: 1 !important; }
+  #btn-node-note { flex: 1 1 auto !important; border: 0 !important; background: #2f6b68 !important;
+    color: #fff !important; }
+  #btn-node-note:hover, #btn-node-note:focus-visible { background: #265a57 !important; }
+  #btn-node-schedule { flex: 0 0 auto !important; border: 1px solid currentColor !important;
+    background: transparent !important; color: inherit !important; opacity: .8 !important; }
+  #btn-node-schedule:hover, #btn-node-schedule:focus-visible { opacity: 1 !important; }
+"""
+
+EXTRAS_CSS_OPEN = '<style id="roadmap-app-extras">'
+EXTRAS_CSS_CLOSE = "</style>"
 
 NOTE_SCRIPT = """<script id="goalweave-note-button">
-/* 在节点那块面板上加一个「笔记」：在应用里就告诉父窗口（它知道这是哪个目标），
-   单独打开这张图时就直接开笔记页。 */
+/* 面板底下那一排「笔记」：在应用里打开就告诉父窗口（它知道这是哪个目标，也知道怎么跳日程表），
+   单独打开这张 HTML 时就自己开笔记页。 */
 (() => {
   let focused = "";
   document.addEventListener("click", (event) => {
@@ -494,23 +519,33 @@ NOTE_SCRIPT = """<script id="goalweave-note-button">
   function decorate() {
     const panel = document.getElementById("focus-chip");
     if (!panel || panel.hidden) return;
-    const actions = panel.querySelector(".relationship-lens-actions");
-    if (!actions || actions.querySelector("#btn-node-note")) return;
-    const button = document.createElement("button");
-    button.id = "btn-node-note";
-    button.type = "button";
-    button.textContent = "笔记";
-    button.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
-    button.addEventListener("click", () => {
-      const id = focused || text("#focus-id");
-      const title = text("#focus-label");
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ source: "goalweave-roadmap", type: "note", nodeId: id, title: title }, "*");
-        return;
-      }
-      window.open("../notes.html?node=" + encodeURIComponent(id) + "&title=" + encodeURIComponent(title), "_blank");
-    });
-    actions.insertBefore(button, actions.firstChild);
+    const copy = panel.querySelector(".relationship-lens-copy");
+    if (!copy) return;
+    let row = copy.querySelector(".gw-node-actions");
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "gw-node-actions";
+      copy.append(row);
+    }
+    let button = row.querySelector("#btn-node-note") || document.getElementById("btn-node-note");
+    if (!button) {
+      button = document.createElement("button");
+      button.id = "btn-node-note";
+      button.type = "button";
+      button.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
+      button.addEventListener("click", () => {
+        const id = focused || text("#focus-id");
+        const title = text("#focus-label");
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ source: "goalweave-roadmap", type: "note", nodeId: id, title: title }, "*");
+          return;
+        }
+        window.open("../notes.html?node=" + encodeURIComponent(id) + "&title=" + encodeURIComponent(title), "_blank");
+      });
+    }
+    if (button.parentElement !== row) row.append(button);
+    // 这个函数挂在 MutationObserver 上：值一样就别写，写一次会再触发一次回调，自己喂自己就死循环了
+    if (button.textContent !== "笔记") button.textContent = "笔记";
   }
   function start() {
     new MutationObserver(decorate).observe(document.body, {
@@ -527,10 +562,9 @@ NOTE_SCRIPT = """<script id="goalweave-note-button">
 def inject_extras(out_file, scale, done_ids):
     """画好之后往成品里补两样东西（都在 Archify 的校验之后，动它不会让图不过）：
 
-    1. 一点样式：做完的知识点点绿、节点面板上那些给架构图用的东西（语义护照 / 种类 / id /
-       出向入向 / 可达范围 / 关系）收掉，节点文字顺手放大一点（Archify 按 1.2em/汉字量宽，
-       真实字宽 1em，正好有这么多余量）。
-    2. 一个「笔记」按钮：挂在节点面板上（脚本很小，跟着 DOM 变化自己贴上去）。
+    1. 一点样式：做完的知识点点绿、节点面板收成「标题 + 完整说明 + 底下一个按钮」，节点文字
+       顺手放大一点（Archify 按 1.2em/汉字量宽，真实字宽 1em，正好有这么多余量）。
+    2. 底下那个「笔记」按钮（脚本很小，跟着 DOM 变化自己贴上去）。
 
     这两样只对「生成之后」的图生效；应用里打开旧图时，goals.js 会再注入一份同样的（同一个 origin，
     能直接改 iframe 里的 DOM），所以手上已经存着的老图也不用重画。
@@ -552,7 +586,7 @@ def inject_extras(out_file, scale, done_ids):
         done_css = "".join(
             DONE_CSS % {"id": ident, "color": DONE_COLOR} for ident in sorted(set(done_ids or []))
         )
-        css += EXTRAS_CSS % {"done": done_css}
+        css += EXTRAS_CSS_OPEN + PANEL_CSS + done_css + EXTRAS_CSS_CLOSE
         html = html.replace("</head>", css + "</head>", 1) if "</head>" in html else html + css
     if "goalweave-note-button" not in html:
         html = html.replace("</body>", NOTE_SCRIPT + "</body>", 1) if "</body>" in html else html + NOTE_SCRIPT

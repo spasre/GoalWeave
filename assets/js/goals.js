@@ -766,15 +766,35 @@
     return frame;
   }
 
-  // 跟 skills/diagram_roadmap.py 里 EXTRAS_CSS / DONE_CSS 是一对，改一边记得改另一边
-  const DIAGRAM_HIDE_CSS = [
-    ".relationship-lens-eyebrow,",   /* 「语义护照」 */
-    "#focus-passport-meta,",         /* 种类 / 架构组件 / 第 N 步 / m1 */
-    "#focus-summary,",               /* N 条出向 · M 条入向 */
-    "#focus-evidence,",              /* 已核验来源 */
-    "#focus-reach,",                 /* 编写可达范围 上游 / 下游 */
-    "#btn-focus-relations,",         /* 「N 条关系」 */
-    "#relationship-lens-list { display: none !important; }"  /* 关系列表 */
+  // 跟 skills/diagram_roadmap.py 里 EXTRAS_CSS / DONE_CSS 是一对，改一边记得改另一边。
+  // 面板排成「标题 + 完整说明 + 底下两个按钮」：右上角只剩一个关闭，别的一律收掉。
+  const DIAGRAM_PANEL_CSS = [
+    ".relationship-lens-eyebrow,", /* 「语义护照」 */
+    "#focus-passport-meta,",       /* 种类 / 架构组件 / 第 N 步 / m1 */
+    "#focus-summary,",             /* N 条出向 · M 条入向 */
+    "#focus-evidence,",            /* 已核验来源 */
+    "#focus-reach,",               /* 编写可达范围 上游 / 下游 */
+    "#btn-focus-copy,",            /* 复制链接 */
+    "#btn-focus-relations,",       /* 「N 条关系」 */
+    "#relationship-lens-list { display: none !important; }", /* 关系列表 */
+    "#focus-chip { width: min(26rem, calc(100% - 2rem)) !important; }",
+    ".relationship-lens-head { display: block !important; padding: .85rem .9rem .8rem !important; }",
+    ".relationship-lens-actions { position: absolute !important; top: .45rem !important; right: .45rem !important; }",
+    // 标题和说明都给足地方完整显示（Archify 默认是单行省略号）
+    ".relationship-lens-title { padding-right: 2.1rem !important; overflow: visible !important;",
+    "  white-space: normal !important; text-overflow: clip !important; }",
+    ".semantic-passport-detail { padding-right: 2.1rem !important; overflow: visible !important;",
+    "  white-space: normal !important; text-overflow: clip !important; }",
+    ".gw-node-actions { display: flex !important; gap: .5rem !important; margin-top: .8rem !important; }",
+    ".gw-node-actions button { min-height: 2.2rem !important; padding: 0 .9rem !important;",
+    "  border-radius: .5rem !important; font-size: .72rem !important; font-weight: 600 !important;",
+    "  line-height: 1 !important; }",
+    "#btn-node-note { flex: 1 1 auto !important; border: 0 !important; background: #2f6b68 !important;",
+    "  color: #fff !important; }",
+    "#btn-node-note:hover, #btn-node-note:focus-visible { background: #265a57 !important; }",
+    "#btn-node-schedule { flex: 0 0 auto !important; border: 1px solid currentColor !important;",
+    "  background: transparent !important; color: inherit !important; opacity: .8 !important; }",
+    "#btn-node-schedule:hover, #btn-node-schedule:focus-visible { opacity: 1 !important; }"
   ].join("\n");
 
   const DIAGRAM_DONE_COLOR = "#2f6b68"; // 跟 App 里的 --teal、技能里的 DONE_COLOR 同色
@@ -793,7 +813,7 @@
         'svg [data-node-id="' + id + '"] text[data-detail="fine"] { fill: ' + DIAGRAM_DONE_COLOR +
         ' !important; opacity: 1 !important; }'
     );
-    return DIAGRAM_HIDE_CSS + "\n" + rules.join("\n");
+    return DIAGRAM_PANEL_CSS + "\n" + rules.join("\n");
   }
 
   // 图在 iframe 里，跟应用同一个 origin —— 生成时注入过的那份只对新图有效，
@@ -815,8 +835,10 @@
     }
     style.textContent = diagramFrameCss(goal);
 
-    // 生成时那份脚本已经贴过一个「笔记」按钮了，别贴第二个
-    if (doc.getElementById("btn-node-note") || wiredDiagramDocs.has(doc)) return;
+    if (wiredDiagramDocs.has(doc)) {
+      fillNodeBrief(doc, goal); // 面板可能正开着，顺手把说明补全
+      return;
+    }
     wiredDiagramDocs.add(doc);
 
     let focused = "";
@@ -828,25 +850,11 @@
       },
       true
     );
-    const read = (selector) => {
-      const node = doc.querySelector(selector);
-      return node ? String(node.textContent || "").trim() : "";
-    };
     const decorate = () => {
       const panel = doc.getElementById("focus-chip");
       if (!panel || panel.hidden) return;
-      const actions = panel.querySelector(".relationship-lens-actions");
-      if (!actions || actions.querySelector("#btn-node-note")) return;
-      const button = doc.createElement("button");
-      button.id = "btn-node-note";
-      button.type = "button";
-      button.textContent = "笔记";
-      button.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
-      button.addEventListener("click", () => {
-        const nodeId = focused || read("#focus-id");
-        if (nodeId) openNodeNote(frame, nodeId, read("#focus-label"));
-      });
-      actions.insertBefore(button, actions.firstChild);
+      fillNodeBrief(doc, goal);
+      ensureNodeActions(doc, frame, goal, () => focused);
     };
     new MutationObserver(decorate).observe(doc.body, {
       childList: true,
@@ -855,6 +863,57 @@
       attributeFilter: ["hidden"]
     });
     decorate();
+  }
+
+  function readInFrame(doc, selector) {
+    const node = doc.querySelector(selector);
+    return node ? String(node.textContent || "").trim() : "";
+  }
+
+  // 图里那句说明是画图时按节点宽度截过的（「学会编译 LLVM、理解工…」），
+  // 面板上有地方，就把目标里存着的完整说明换上去。
+  function fillNodeBrief(doc, goal) {
+    if (!goal) return;
+    const detail = doc.getElementById("focus-detail");
+    if (!detail || detail.hidden) return;
+    const node = (goal.nodes || []).find((item) => item.id === readInFrame(doc, "#focus-id"));
+    if (node && node.brief && detail.textContent !== node.brief) detail.textContent = node.brief;
+  }
+
+  // 面板底下那一排：笔记（大，占满左边）+ 去日程表看（右边）
+  function ensureNodeActions(doc, frame, goal, focusedId) {
+    const panel = doc.getElementById("focus-chip");
+    const copy = panel ? panel.querySelector(".relationship-lens-copy") : null;
+    if (!copy) return;
+    let row = copy.querySelector(".gw-node-actions");
+    if (!row) {
+      row = doc.createElement("div");
+      row.className = "gw-node-actions";
+      copy.append(row);
+    }
+    let note = row.querySelector("#btn-node-note") || doc.getElementById("btn-node-note");
+    if (!note) {
+      note = doc.createElement("button");
+      note.id = "btn-node-note";
+      note.type = "button";
+      note.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
+      note.addEventListener("click", () => {
+        const nodeId = focusedId() || readInFrame(doc, "#focus-id");
+        if (nodeId) openNodeNote(frame, nodeId, readInFrame(doc, "#focus-label"));
+      });
+    }
+    if (note.parentElement !== row) row.append(note);
+    // 注意：这个函数是从 MutationObserver 回调里调的，每一次 DOM 写入都会再触发一次回调 ——
+    // 所以「值一样就别写」，不然自己喂自己，转成死循环把主线程占死。
+    if (note.textContent !== "笔记") note.textContent = "笔记";
+    if (!goal || row.querySelector("#btn-node-schedule")) return;
+    const go = doc.createElement("button");
+    go.id = "btn-node-schedule";
+    go.type = "button";
+    go.textContent = "去日程表看";
+    go.title = "跳到日程表里，看这条知识点排在什么时候";
+    go.addEventListener("click", () => goNodeSchedule(frame, focusedId() || readInFrame(doc, "#focus-id")));
+    row.append(go);
   }
 
   // 打开某一个知识点的笔记：有就打开，没有就新建，并记上「哪个目标的哪个节点」
@@ -870,6 +929,24 @@
       nodeId: nodeId,
       title: (node && node.title) || String(title || "") || "新笔记"
     });
+  }
+
+  // 「去日程表看」：这条知识点排在什么时候，直接跳到那一周 / 那一天并把它选中
+  function goNodeSchedule(frame, nodeId) {
+    if (!nodeId) return;
+    const box = frame.closest(".goal-diagram-box");
+    const wizardBox = frame.closest("#wz-diagram-box");
+    const goalId = (box && box.dataset.id) || (wizardBox ? wizard.goalId : "");
+    const goal = goalId ? api.goal(goalId) : null;
+    const node = goal ? (goal.nodes || []).find((item) => item.id === nodeId) : null;
+    // 做完的知识点，它的任务已经进回收站了 —— 那就按日期跳过去
+    const task = goalId
+      ? api.list().find((item) => item.goalId === goalId && item.nodeId === nodeId)
+      : null;
+    const params = [];
+    if (task) params.push("task=" + encodeURIComponent(task.id));
+    if (node && node.date) params.push("date=" + encodeURIComponent(node.date));
+    goAfterFlush("schedule.html" + (params.length > 0 ? "?" + params.join("&") : ""));
   }
 
   function toggleGoalDiagram(button) {
