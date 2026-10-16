@@ -135,10 +135,23 @@ def _replace_with_retry(tmp, target, tries=5):
     raise last
 
 
+def _write_text_with_retry(tmp, text, tries=5):
+    """临时文件本身也可能被占住（WinError 13），同样等一下重试。"""
+    last = None
+    for attempt in range(tries):
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            return
+        except OSError as error:
+            last = error
+            time.sleep(0.05 * (attempt + 1))
+    raise last
+
+
 def save_config(config):
     config["updatedAt"] = datetime.datetime.now().isoformat(timespec="seconds")
     tmp = CONFIG_FILE.parent / (CONFIG_FILE.name + ".tmp")
-    tmp.write_text(env_text(config), encoding="utf-8")
+    _write_text_with_retry(tmp, env_text(config))
     _replace_with_retry(tmp, CONFIG_FILE)
     try:  # 密钥文件尽量只给自己看（Windows 上不一定生效，失败就算了）
         os.chmod(CONFIG_FILE, 0o600)
@@ -176,7 +189,7 @@ def _write_data(rev, store, updated_at):
     payload = {"rev": rev, "updatedAt": updated_at, "store": store}
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     tmp = DATA_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_text_with_retry(tmp, json.dumps(payload, ensure_ascii=False) + "\n")
     _replace_with_retry(tmp, DATA_FILE)
     return rev
 

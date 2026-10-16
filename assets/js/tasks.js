@@ -2,6 +2,8 @@
   "use strict";
 
   const STORE_KEY = "spasre-tasks-v1";
+  // 本地改了还没写进后端的记号（值是那次改动的时间）
+  const DIRTY_KEY = "spasre-tasks-dirty";
   const DAILY_CATEGORY = "每日推荐";
   const DEFAULT_CATEGORIES = ["学习", "工作", "生活", "每日推荐"];
   // 新建任务里「分类」下拉框的最后一项：选了它就展开一个输入框填新分类名
@@ -279,15 +281,16 @@
     const data = await response.json().catch(() => null);
     if (data && typeof data.rev === "number") {
       state.remote.rev = data.rev;
+      markClean();
       return true;
     }
-    // 后端偶尔写不进去（Windows 上文件被别的东西占住会报 WinError 5）：
-    // 等一下再试两次，别让这次改动悄悄丢掉
+    // 后端偶尔写不进去（Windows 上文件被别的东西占住会报 WinError 5 / 13）：
+    // 等一下再试两次；真不行就留着 dirty 记号，下次改动或下次开页面再补
     if ((tries || 0) < 2) {
       await new Promise((resolve) => window.setTimeout(resolve, 700));
       return pushRemote((tries || 0) + 1);
     }
-    console.warn("数据没能存到后端，稍后下一次改动会再试。");
+    console.warn("数据没能存到后端，留着本地这份，下次开页面会再补。");
     return false;
   }
 
@@ -297,7 +300,7 @@
     return data && data.ok ? data : null;
   }
 
-  // 后端在的时候数据以后端为准；后端还没有数据就把本地这份推上去（第一次迁移）
+  // 后端在的时候数据以后端为准；本地那份还没推上去（或者比后端新）就以本地为准；后端还没有数据就推上去
   async function bootRemote() {
     let data = null;
     try {
@@ -309,9 +312,14 @@
     state.remote.on = true;
     state.remote.rev = data.rev;
     if (data.store) {
+      if (preferLocal(data)) {
+        await pushRemote();
+        return;
+      }
       // 后端有数据就以它为准，本地那份兜底副本也跟着更新
       store = normalizeStore(data.store);
       writeLocal();
+      if (dirtyStamp() && dirtyStamp() <= String(data.updatedAt || "")) markClean();
       renderAll();
       return;
     }
@@ -332,9 +340,15 @@
       return;
     }
     if (!data || data.rev <= state.remote.rev) return;
+    // 本地还有没写上去的改动、而且比后端那份新：先把本地推上去，别被旧的盖回来
+    if (preferLocal(data)) {
+      await pushRemote();
+      return;
+    }
     state.remote.rev = data.rev;
     store = normalizeStore(data.store);
     writeLocal();
+    if (dirtyStamp() && dirtyStamp() <= String(data.updatedAt || "")) markClean();
     renderAll();
   }
 
@@ -345,8 +359,9 @@
       tasks: [],
       trash: [],
       goals: [],
+      notes: [],
       settings:Object.assign({}, DEFAULT_SETTINGS, { segments: cleanSegments(null) }),
-      meta: { categories: [] },
+      meta: { categories: [], noteCategories: [] },
       chat: [],
       dailySeen: [],
       daily: null,
@@ -667,10 +682,16 @@
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
       trash: Array.isArray(parsed.trash) ? parsed.trash : [],
       goals: Array.isArray(parsed.goals) ? parsed.goals : [],
+      notes: (Array.isArray(parsed.notes) ? parsed.notes : []).map(cleanNote).filter(Boolean),
       settings: Object.assign({}, DEFAULT_SETTINGS, parsed.settings || {}, {
         segments: cleanSegments(parsed.settings && parsed.settings.segments)
       }),
-      meta: { categories: Array.isArray(parsed.meta && parsed.meta.categories) ? parsed.meta.categories : [] },
+      meta: {
+        categories: Array.isArray(parsed.meta && parsed.meta.categories) ? parsed.meta.categories : [],
+        noteCategories: Array.isArray(parsed.meta && parsed.meta.noteCategories)
+          ? parsed.meta.noteCategories.map((name) => String(name || "").trim()).filter(Boolean).slice(0, 40)
+          : []
+      },
       chat: Array.isArray(parsed.chat)
         ? parsed.chat.filter((item) => item && typeof item.text === "string").slice(-CHAT_LIMIT)
         : [],
@@ -715,10 +736,75 @@
     }
   }
 
+  // 「本地这份还没写进后端」的记号（换页面 / 关标签页都不丢）。
+  // 格式跟后端的 updatedAt 一样（本地时间、秒），好直接比大小。
+  function nowStamp() {
+    const pad = (value) => String(value).padStart(2, "0");
+    const now = new Date();
+    return (
+      now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate()) + "T" +
+      pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds())
+    );
+  }
+
+  function markDirty() {
+    try {
+      window.localStorage.setItem(DIRTY_KEY, nowStamp());
+    } catch (error) {
+      /* 隐私模式下写不了就算了 */
+    }
+  }
+
+  function markClean() {
+    try {
+      window.localStorage.removeItem(DIRTY_KEY);
+    } catch (error) {
+      /* 同上 */
+    }
+  }
+
+  function dirtyStamp() {
+    try {
+      return window.localStorage.getItem(DIRTY_KEY) || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  // 后端那份要不要采纳：本地有没推上去的改动，而且比后端那份新 → 反过来把本地推上去。
+  // 少了这一条，一次没推成功的改动（比如写盘被占了一下）会在下次开页面时被后端那份旧的盖掉。
+  function preferLocal(data) {
+    const dirty = dirtyStamp();
+    if (!dirty) return false;
+    return dirty > String((data && data.updatedAt) || "");
+  }
+
   function save() {
     // 本地留一份兜底副本（后端不在时用得上），后端在跑时以下面这份为准
     writeLocal();
+    markDirty();
     if (state.remote.on) queueRemoteSave();
+  }
+
+  // 页面要跳走 / 关掉之前：那 400ms 防抖里攒着的改动得赶紧送出去，
+  // 不然新页面打开时又会按后端那份（旧的）走，等于白点。
+  function flushOnLeave() {
+    if (!state.remote.on || !dirtyStamp()) return;
+    try {
+      const body = JSON.stringify({ store: store });
+      if (window.navigator && typeof window.navigator.sendBeacon === "function") {
+        window.navigator.sendBeacon("/api/data", new Blob([body], { type: "application/json" }));
+        return;
+      }
+      fetch("/api/data", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: body,
+        keepalive: true
+      }).catch(() => {});
+    } catch (error) {
+      /* 尽力而为，推不上去就靠 dirty 记号下次补 */
+    }
   }
 
   /* ---------- agent key ---------- */
@@ -1392,6 +1478,132 @@
     return node.done;
   }
 
+  /* ---------- 笔记 ---------- */
+
+  // 一篇笔记：分类是自由字符串；能挂到任务（taskId）或目标的知识点（goalId + nodeId）上。
+  // 页面上「有笔记就去那篇，没有就新建」都走 noteFor / openNote。
+  const DEFAULT_NOTE_CATEGORIES = ["随手记", "复盘", "资料"];
+
+  function cleanNote(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const id = String(raw.id || "").trim();
+    if (!id) return null;
+    const stamp = new Date().toISOString();
+    return {
+      id: id,
+      title: String(raw.title || "").trim().slice(0, 80) || "无标题",
+      body: String(raw.body || ""),
+      category: String(raw.category || "").trim().slice(0, 20) || DEFAULT_NOTE_CATEGORIES[0],
+      taskId: String(raw.taskId || ""),
+      goalId: String(raw.goalId || ""),
+      nodeId: String(raw.nodeId || ""),
+      createdAt: String(raw.createdAt || stamp),
+      updatedAt: String(raw.updatedAt || raw.createdAt || stamp)
+    };
+  }
+
+  function notes() {
+    return store.notes
+      .slice()
+      .sort((a, b) => (String(a.updatedAt) < String(b.updatedAt) ? 1 : String(a.updatedAt) > String(b.updatedAt) ? -1 : 0));
+  }
+
+  function findNote(id) {
+    return store.notes.find((note) => note.id === id) || null;
+  }
+
+  function createNote(patch) {
+    const source = patch || {};
+    const note = cleanNote({
+      id: newId(),
+      title: source.title || "新笔记",
+      body: source.body || "",
+      category: source.category || DEFAULT_NOTE_CATEGORIES[0],
+      taskId: source.taskId || "",
+      goalId: source.goalId || "",
+      nodeId: source.nodeId || ""
+    });
+    store.notes.unshift(note);
+    save();
+    return note;
+  }
+
+  function updateNote(id, patch) {
+    const note = findNote(id);
+    if (!note) return null;
+    const source = patch || {};
+    ["title", "body", "category", "taskId", "goalId", "nodeId"].forEach((key) => {
+      if (source[key] !== undefined) note[key] = String(source[key] || "");
+    });
+    note.title = String(note.title || "").trim().slice(0, 80) || "无标题";
+    note.category = String(note.category || "").trim().slice(0, 20) || DEFAULT_NOTE_CATEGORIES[0];
+    note.updatedAt = new Date().toISOString();
+    save();
+    return note;
+  }
+
+  function removeNote(id) {
+    const index = store.notes.findIndex((note) => note.id === id);
+    if (index === -1) return false;
+    store.notes.splice(index, 1);
+    save();
+    return true;
+  }
+
+  // 分类 = 默认那三个 + 自己加的 + 已经在用的（笔记上写了什么就算什么）
+  function noteCategories() {
+    const used = store.notes.map((note) => String(note.category || "").trim()).filter(Boolean);
+    const custom = Array.isArray(store.meta.noteCategories) ? store.meta.noteCategories : [];
+    return DEFAULT_NOTE_CATEGORIES.concat(custom).concat(used).filter((name, index, all) => name && all.indexOf(name) === index);
+  }
+
+  function addNoteCategory(name) {
+    const key = String(name || "").trim().slice(0, 20);
+    if (!key) return "";
+    if (DEFAULT_NOTE_CATEGORIES.indexOf(key) < 0 && store.meta.noteCategories.indexOf(key) < 0) {
+      store.meta.noteCategories.push(key);
+      save();
+    }
+    return key;
+  }
+
+  // 这篇东西挂在哪篇笔记上：先按任务、再按目标的知识点、最后只认节点（从图上点进来的那种）
+  function noteFor(target) {
+    const want = target || {};
+    if (want.taskId) {
+      const hit = store.notes.find((note) => note.taskId === want.taskId);
+      if (hit) return hit;
+    }
+    if (want.goalId && want.nodeId) {
+      const hit = store.notes.find((note) => note.goalId === want.goalId && note.nodeId === want.nodeId);
+      if (hit) return hit;
+    }
+    if (want.nodeId) {
+      const hit = store.notes.find((note) => note.nodeId === want.nodeId && (!want.goalId || note.goalId === want.goalId));
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // 有就直接切到那篇，没有就新建一篇再切过去
+  function openNote(target) {
+    const want = target || {};
+    const existing = noteFor(want);
+    if (existing) {
+      window.location.href = "notes.html?note=" + encodeURIComponent(existing.id);
+      return existing;
+    }
+    const note = createNote({
+      title: want.title || "新笔记",
+      category: want.category || DEFAULT_NOTE_CATEGORIES[0],
+      taskId: want.taskId || "",
+      goalId: want.goalId || "",
+      nodeId: want.nodeId || ""
+    });
+    window.location.href = "notes.html?note=" + encodeURIComponent(note.id) + "&new=1";
+    return note;
+  }
+
   /* ---------- mutations ---------- */
 
   function createTask(input) {
@@ -1837,11 +2049,17 @@
       edit.type = "button";
       edit.dataset.action = "edit";
       edit.dataset.id = task.id;
+      const note = el("button", "task-action", "笔记");
+      note.type = "button";
+      note.dataset.action = "task-note";
+      note.dataset.id = task.id;
+      note.title = "这条的笔记：有就打开，没有就新建一篇";
+      if (noteFor({ taskId: task.id })) note.classList.add("is-on");
       const remove = el("button", "task-action task-action-danger", "删除");
       remove.type = "button";
       remove.dataset.action = "remove";
       remove.dataset.id = task.id;
-      actions.append(plan, edit, remove);
+      actions.append(plan, note, edit, remove);
       item.append(actions);
     }
     return item;
@@ -2079,7 +2297,7 @@
     if (!lib) return;
     const sheet = openSheet("先挑几个方向吧", { onClose: renderDailySwitch });
     sheet.body.append(
-      el("p", "task-hint", "每天推荐会按这些方向挑知识点。挑 3 个以上更准；自己想到的方向也能直接输入；不想挑就点「跳过」，那就随机推 —— 以后点「换一个」会换方向，并自动帮你记几个方向。")
+      el("p", "task-hint", "每日推荐按这些方向挑知识点。挑 3 个以上更准，也能自己输入；不挑就随机推，点「换一个」会自动记下方向。")
     );
     const view = lib.picker({
       min: 3,
@@ -3130,6 +3348,12 @@
     } else if (action === "edit") {
       const task = store.tasks.find((item) => item.id === id);
       if (task) openTaskSheet(task);
+    } else if (action === "task-note") {
+      const task = store.tasks.concat(store.trash).find((item) => item.id === id);
+      // 跳走之前先把手上的改动推上去，不然新页面拉回旧的那份
+      const go = () => openNote({ taskId: id, title: task ? task.title : "", category: "随手记" });
+      if (typeof flushRemote === "function") Promise.resolve(flushRemote()).then(go, go);
+      else go();
     } else if (action === "open-links") {
       const task = store.tasks.find((item) => item.id === id);
       if (task) openLinkDialog(task);
@@ -3479,6 +3703,13 @@
 
   /* ---------- boot ---------- */
 
+  // 「后端那份数据比对完了」的信号。引导页要等它：探活（/api/health）比取数据先回来，
+  // 本地还是空的时候会被误判成新用户，把三步引导弹在一个已经有数据的库上。
+  let markRemoteSettled = function () {};
+  const remoteSettled = new Promise((resolve) => {
+    markRemoteSettled = resolve;
+  });
+
   applyInitialFilters();
   ensureLinkDialog();
   wireHome();
@@ -3502,10 +3733,11 @@
   bootRemote()
     .catch(() => {})
     .then(() => {
+      markRemoteSettled(); // 到这儿 store 已经是对的那一份了，引导可以下判断
       ensureDailyRecommendation();
-        renderAll();
-        return upgradeDailyWithAI();
-      })
+      renderAll();
+      return upgradeDailyWithAI();
+    })
       .then(() => inferInterestsFromDaily())
     .then((changed) => {
       if (changed) renderAll();
@@ -3514,6 +3746,9 @@
 
   // 别的浏览器改了数据，这边跟着刷新
   window.setInterval(pollRemote, 5000);
+  // 换页面 / 关标签页之前，把还没推上去的改动送出去
+  window.addEventListener("pagehide", flushOnLeave);
+  window.addEventListener("beforeunload", flushOnLeave);
 
   window.spasreTasks = {
     version: 2,
@@ -3542,6 +3777,10 @@
     },
     markOnboarded: function () {
       updateSettings({ onboarded: true });
+    },
+    // 后端那份比对完的 promise（引导页用；纯静态没后端时它也会 resolve，只是快）
+    whenReady: function () {
+      return remoteSettled;
     },
     dropTodayDaily: dropTodayDaily,
     flush: flushRemote,
@@ -3761,6 +4000,34 @@
       renderAll();
       return value;
     },
+    // 笔记：新建 / 改 / 删 / 分类；openNote = 有就切过去、没有就新建
+    notes: function () {
+      return notes().map((note) => Object.assign({}, note));
+    },
+    note: function (id) {
+      const note = findNote(id);
+      return note ? Object.assign({}, note) : null;
+    },
+    addNote: function (patch) {
+      return createNote(patch);
+    },
+    updateNote: function (id, patch) {
+      const note = updateNote(id, patch);
+      renderAll();
+      return note ? Object.assign({}, note) : null;
+    },
+    removeNote: function (id) {
+      const ok = removeNote(id);
+      if (ok) renderAll();
+      return ok;
+    },
+    noteCategories: noteCategories,
+    addNoteCategory: addNoteCategory,
+    noteFor: function (target) {
+      const note = noteFor(target);
+      return note ? Object.assign({}, note) : null;
+    },
+    openNote: openNote,
     agentChat: agentChat,
     upgradeDaily: upgradeDailyWithAI,
     rerollDaily: rerollDaily

@@ -33,7 +33,6 @@
   <div class="page">
     <header class="site-header">
       <a class="wordmark" href="index.html" aria-label="任务板，返回首页">
-        <span class="mark" aria-hidden="true">s</span>
         <span>任务板</span>
       </a>
       <div class="header-tools">
@@ -42,6 +41,7 @@
           <a href="schedule.html">日程表</a>
           <a href="tasks.html">任务</a>
           <a href="goals.html">目标</a>
+          <a href="notes.html">笔记</a>
           <a href="settings.html" aria-current="page">设置</a>
         </nav>
         <div class="header-actions">
@@ -85,7 +85,7 @@
             </select>
           </label>
         </div>
-        <p class="task-hint">这两项跟主题一样只存这台设备（换个浏览器各调各的），改完立刻生效。主题（亮色 / 暗色 / 跟随系统）点页眉右上角那个按钮循环切。</p>
+        <p class="task-hint">只存这台设备（换个浏览器各调各的），改完立刻生效。</p>
       </section>
 
       <section class="task-panel-block" aria-labelledby="settings-interest-title" id="settings-interests">
@@ -190,7 +190,7 @@
 
       <section class="task-panel-block" aria-labelledby="settings-data-title" id="settings-data">
         <h2 class="task-panel-title" id="settings-data-title">数据</h2>
-        <p class="task-hint">「清空数据」会把任务、回收站、长期目标与知识点、日程（时间段和非空闲）、聊天记录、兴趣标签、每日推荐全部删掉，后端那份看板数据也一起清 —— 清完会重新走一遍新用户引导。</p>
+        <p class="task-hint">任务、回收站、目标与知识点、日程、聊天记录、兴趣标签、每日推荐、笔记都会删掉（后端那份一起清），清完重新走一遍新用户引导。</p>
         <p class="task-hint">助手里的接口地址和模型密钥（本机 <code>.env</code>）会留着：那是配置不是数据。想连它一起清，去上面「助手」那张卡片里改配置。</p>
         <div class="task-actions-cell">
           <button class="task-action task-action-danger" type="button" id="wipe-data">清空数据…</button>

@@ -845,7 +845,20 @@
 
   /* ---------- 新建目标向导 ---------- */
 
-  const wizard = { step: 1, goalId: "", nodes: [], note: "", source: "", diagram: "" };
+  const wizard = {
+    step: 1,
+    goalId: "",
+    nodes: [],
+    note: "",
+    source: "",
+    diagram: "",
+    mode: "guide",   // guide：先定方向；paste：贴一份别处聊好的规划
+    chat: [],        // 第三步跟助手改大纲的对话（只留这一轮的，关掉就清）
+    busy: false
+  };
+
+  // 估完成时间用：一条知识点大概占一次坐下（跟排期时的默认时长一个量级）
+  const DEFAULT_NODE_HOURS = 1.5;
 
   function wzField(id) {
     return document.getElementById(id);
@@ -864,6 +877,9 @@
   function sourceLabel(source) {
     if (source === "api") return "模型生成";
     if (source === "skill") return "技能生成";
+    if (source === "plan.import") return "按你贴的那份读的";
+    if (source === "plan.revise") return "跟助手改过";
+    if (source === "local") return "按行拆的";
     return "内置模板";
   }
 
@@ -878,6 +894,205 @@
     if (!units) return 1;
     const days = Math.max(1, daysBetween(startKey, deadlineKey) + 1);
     return Math.max(1, Math.min(8, Math.ceil(units / days)));
+  }
+
+  /* ---------- 新建目标：先定方向 / 贴一份现成规划 ---------- */
+
+  // 「先定方向 / 粘贴规划」两个入口；编辑已有目标时不选方式，直接用名称那份表单
+  function wizardPane() {
+    const modes = wzField("wz-modes");
+    if (modes) modes.hidden = Boolean(wizard.goalId);
+    const guideHint = wzField("wz-guide-hint");
+    if (guideHint) guideHint.hidden = Boolean(wizard.goalId);
+    document.querySelectorAll("#wz-modes .wz-mode").forEach((btn) => {
+      const on = btn.dataset.wzMode === wizard.mode;
+      btn.classList.toggle("is-on", on);
+      btn.setAttribute("aria-selected", String(on));
+    });
+    const guide = wzField("wz-pane-guide");
+    const paste = wzField("wz-pane-paste");
+    if (guide) guide.hidden = wizard.mode !== "guide";
+    if (paste) paste.hidden = wizard.mode !== "paste";
+    const next = wzField("wz-next");
+    if (next && wizard.step === 1) next.textContent = wizardNextLabel();
+  }
+
+  function wizardNextLabel() {
+    if (wizard.step === 1) return wizard.mode === "paste" && !wizard.goalId ? "让助手读一遍" : "下一步";
+    return wizard.step < 4 ? "下一步" : "完成，去日程表安排";
+  }
+
+  // 按大纲估完成时间：每条约 1.5 小时，摊到每周投入上，最少留一周
+  function suggestDeadline(count, weekly) {
+    const hours = Math.max(1, Number(weekly) || 7);
+    const days = Math.max(7, Math.ceil(((Math.max(1, count) * DEFAULT_NODE_HOURS) / hours) * 7));
+    return { days: days, key: shiftDate(api.today(), days) };
+  }
+
+  function setDeadlineSuggestion(key, why) {
+    if (key) {
+      const field = wzField("wz-deadline");
+      if (field) field.value = key;
+    }
+    const hint = wzField("wz-deadline-hint");
+    if (hint) hint.textContent = key ? why + "，先填 " + key + "；要改就改上面那个日期。" : "";
+  }
+
+  // 走后端技能：改大纲（revise）/ 读一份贴进来的规划（import）
+  async function runOutlineSkill(params) {
+    const bridge = skillBridge();
+    if (!bridge) return { ok: false, error: "本机后端没在跑 —— 起一下 serve.ps1 再试。" };
+    try {
+      const payload = await bridge.run("plan.outline", params);
+      const result = (payload && payload.result) || null;
+      if (!result) return { ok: false, error: "后端没回话。" };
+      if (!result.ok) return { ok: false, error: String(result.error || "没改成。") };
+      return result;
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  }
+
+  // 技能回来的知识点：deps 写的是标题，交给 normalizeModelNodes 换 id，再去悬空依赖、断环
+  function nodesFromAnswer(raw) {
+    return sanitizeNodes(normalizeModelNodes(Array.isArray(raw) ? raw : []));
+  }
+
+  function setWizardBusy(on) {
+    wizard.busy = Boolean(on);
+    ["wz-next", "wz-back", "wz-chat-send"].forEach((id) => {
+      const node = wzField(id);
+      if (node) node.disabled = wizard.busy;
+    });
+  }
+
+  function chatReady() {
+    const configured = typeof api.agentConfigured === "function" ? api.agentConfigured() : false;
+    const online = Boolean(window.spasreBackend && window.spasreBackend.online);
+    return { ok: configured && online, configured: configured, online: online };
+  }
+
+  function renderWizardChat() {
+    const ready = chatReady();
+    const box = wzField("wz-chat");
+    const hint = wzField("wz-chat-hint");
+    if (box) box.hidden = !ready.ok || wizard.nodes.length === 0;
+    if (hint) {
+      hint.hidden = ready.ok;
+      hint.textContent = ready.ok
+        ? ""
+        : ready.configured
+          ? "跟助手改大纲要后端在跑 —— 起一下 serve.ps1 再来；下面的列表里也能直接改。"
+          : "跟助手一句句改大纲要先配助手（设置页填接口地址和密钥）；下面的列表里也能直接改。";
+    }
+    renderWizardChatLog();
+  }
+
+  function renderWizardChatLog() {
+    const log = wzField("wz-chat-log");
+    if (!log) return;
+    log.replaceChildren();
+    wizard.chat.forEach((item) => {
+      log.append(el("p", "wz-chat-msg is-" + item.role, item.text));
+    });
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function askWizardChat() {
+    if (wizard.busy) return;
+    const field = wzField("wz-chat-text");
+    const message = field ? String(field.value || "").trim() : "";
+    if (!message) return;
+    const ready = chatReady();
+    if (!ready.ok) {
+      setWzStatus(ready.configured ? "后端没在跑，改不了。" : "还没配助手，先在设置页配上。");
+      return;
+    }
+    if (field) field.value = "";
+    wizard.chat.push({ role: "me", text: message });
+    renderWizardChatLog();
+    setWizardBusy(true);
+    setWzStatus("正在按你说的改…");
+    const titles = new Map(wizard.nodes.map((node) => [node.id, node.title]));
+    const answer = await runOutlineSkill({
+      mode: "revise",
+      goal: wzValue("wz-title"),
+      weekly: Number(wzValue("wz-weekly")) || 7,
+      nodes: wizard.nodes.map((node) => ({
+        title: node.title,
+        brief: node.brief || "",
+        section: node.section || "",
+        deps: (node.deps || []).map((id) => titles.get(id)).filter(Boolean)
+      })),
+      message: message
+    });
+    setWizardBusy(false);
+    if (!answer.ok) {
+      wizard.chat.push({ role: "error", text: answer.error });
+      renderWizardChatLog();
+      setWzStatus("");
+      return;
+    }
+    wizard.nodes = nodesFromAnswer(answer.nodes);
+    wizard.source = "plan.revise";
+    wizard.diagram = "";
+    // 助手没给一句话也要有回应，不然对话看着像卡住了
+    wizard.chat.push({ role: "assistant", text: answer.reply || "改成 " + wizard.nodes.length + " 个知识点，看看对不对。" });
+    renderWizardChatLog();
+    renderWizardNodes();
+    setWzStatus("");
+    await renderWizardDiagram();   // 图跟着改完的大纲重画一张
+  }
+
+  // 「粘贴现成规划」：让助手读一遍，读出知识点、前后关系和文字里的完成时间
+  async function readPastedPlan() {
+    const text = wzValue("wz-paste");
+    if (text.length < 8) {
+      setWzStatus("先把那份规划贴进来。");
+      const field = wzField("wz-paste");
+      if (field) field.focus();
+      return;
+    }
+    const bridge = skillBridge();
+    if (!bridge) {
+      setWzStatus("读这份规划要靠后端 —— 起一下 serve.ps1 再来。");
+      return;
+    }
+    const weekly = Number(wzValue("wz-weekly")) || 7;
+    setWizardBusy(true);
+    setWzStatus("正在读这份规划…");
+    const answer = await runOutlineSkill({
+      mode: "import",
+      text: text,
+      goal: wzValue("wz-paste-title"),
+      weekly: weekly
+    });
+    setWizardBusy(false);
+    if (!answer.ok) {
+      setWzStatus(answer.error);
+      return;
+    }
+    wizard.nodes = nodesFromAnswer(answer.nodes);
+    if (wizard.nodes.length === 0) {
+      setWzStatus("这份规划里没读出知识点，换一段更具体的试试。");
+      return;
+    }
+    wizard.note = answer.reply || "";
+    wizard.source = answer.source === "local" ? "local" : "plan.import";
+    wizard.diagram = "";
+    const title = wzField("wz-title");
+    if (title) title.value = answer.title || wzValue("wz-paste-title") || "";
+    const detail = wzField("wz-detail");
+    if (detail) detail.value = answer.detail || "";
+    wizard.builtFor = wzValue("wz-title");
+    setWzStatus("");
+    if (answer.deadline && answer.deadline > api.today()) {
+      setDeadlineSuggestion(answer.deadline, "规划里提到");
+    } else {
+      const guess = suggestDeadline(wizard.nodes.length, weekly);
+      setDeadlineSuggestion(guess.key, wizard.nodes.length + " 个知识点 × 每条约 " + DEFAULT_NODE_HOURS + " 小时 ÷ 每周 " + weekly + " 小时 ≈ " + guess.days + " 天");
+    }
+    gotoStep(2);
   }
 
   /* ---------- 日程表：一天切几段，按每周投入把知识点填进去 ---------- */
@@ -2575,21 +2790,31 @@
     wizard.note = goal ? goal.planNote || "" : "";
     wizard.source = goal ? goal.planSource || "" : "";
     wizard.diagram = goal ? goal.diagram || "" : "";
+    wizard.mode = "guide";
+    wizard.chat = [];
 
     const title = wzField("wz-title");
     if (title) title.value = goal ? goal.title : "";
     const detail = wzField("wz-detail");
     if (detail) detail.value = goal ? goal.detail || "" : "";
+    const paste = wzField("wz-paste");
+    if (paste) paste.value = "";
+    const pasteTitle = wzField("wz-paste-title");
+    if (pasteTitle) pasteTitle.value = "";
     const deadline = wzField("wz-deadline");
     if (deadline) deadline.value = (goal && goal.deadline) || shiftDate(api.today(), 28);
     const weekly = wzField("wz-weekly");
     if (weekly) weekly.value = String((goal && goal.weekly) || 7);
     const heading = wzField("goal-sheet-title");
     if (heading) heading.textContent = goal ? "编辑目标" : "新建目标";
+    const hint = wzField("wz-deadline-hint");
+    if (hint) hint.textContent = "";
 
     setWzStatus("");
+    setWizardBusy(false);
     renderWizardNodes();
     gotoStep(1);
+    wizardPane();
     sheet.hidden = false;
     if (title) title.focus();
   }
@@ -2612,17 +2837,40 @@
     const back = wzField("wz-back");
     if (back) back.hidden = wizard.step === 1;
     const next = wzField("wz-next");
-    if (next) next.textContent = wizard.step < 4 ? "下一步" : "完成，去日程表安排";
+    if (next) next.textContent = wizardNextLabel();
+    if (wizard.step === 3) renderWizardChat();
     if (wizard.step === 4) renderWizardSummary();
   }
 
   async function wizardNext() {
     if (wizard.step === 1) {
+      // 贴一份别处聊好的规划：先让助手读一遍，读出知识点和完成时间
+      if (wizard.mode === "paste" && !wizard.goalId) {
+        await readPastedPlan();
+        return;
+      }
       if (!wzValue("wz-title")) {
         setWzStatus("先写一个学习目标。");
         const title = wzField("wz-title");
         if (title) title.focus();
         return;
+      }
+      // 先定方向：这一步就把大纲和建议的完成时间出好，下一步只确认时间。
+      // 新建时改了目标名，大纲跟着重出（编辑已有目标时不重出，免得把手上的大纲冲掉）
+      const now = wzValue("wz-title");
+      const stale = !wizard.goalId && wizard.builtFor && wizard.builtFor !== now;
+      if (wizard.nodes.length === 0 || stale) {
+        setWizardBusy(true);
+        await generateWizardNodes();
+        setWizardBusy(false);
+        if (wizard.nodes.length === 0) return; // 生成失败时状态行里已经有原因
+        const weekly = Number(wzValue("wz-weekly")) || 7;
+        const guess = suggestDeadline(wizard.nodes.length, weekly);
+        setDeadlineSuggestion(
+          guess.key,
+          wizard.nodes.length + " 个知识点 × 每条约 " + DEFAULT_NODE_HOURS + " 小时 ÷ 每周 " + weekly +
+            " 小时 ≈ " + guess.days + " 天"
+        );
       }
       setWzStatus("");
       gotoStep(2);
@@ -2654,6 +2902,12 @@
         return;
       }
       setWzStatus("");
+      // 大纲最后定下来的时候把路线图补上（中途改过的话，图还等着重画）
+      if (!wizard.diagram) {
+        setWizardBusy(true);
+        await renderWizardDiagram();
+        setWizardBusy(false);
+      }
       gotoStep(4);
       return;
     }
@@ -2688,6 +2942,7 @@
     wizard.nodes = result.nodes;
     wizard.note = result.note;
     wizard.source = result.source;
+    wizard.builtFor = goal.title;
     wizard.diagram = ""; // 知识点换了，之前那张路线图就对不上了
     renderWizardNodes();
     setWzStatus(planStatus(""));
@@ -2704,6 +2959,8 @@
       start: api.today(),
       deadline: wzValue("wz-deadline")
     }));
+    // 助手读那份规划 / 改完一版之后说的那句，摆在大纲下面，好对着核对
+    if (wizard.note) box.append(el("p", "task-hint", wizard.note));
   }
 
   let outlineTimer = 0;
@@ -2804,7 +3061,7 @@
     if (units === 0) return;
     // 具体排到哪几天不在这儿列了：去日程表看，还能顺手拖时间、整体重排
     preview.append(
-      el("p", "task-hint", "具体排到哪几天、几点到几点，到日程表上看 —— 点「完成，去日程表安排」就过去。还没排期的知识点会待在日程表顶上的「待安排」里，拖进格子就行；想整体重排就按那边的「重新规划」。")
+      el("p", "task-hint", "排到哪几天、几点到几点，去日程表看；还没排上的会待在那边顶上的「待安排」里。")
     );
   }
 
@@ -2867,7 +3124,8 @@
     if (!box) return;
     const frame = document.createElement("iframe");
     frame.className = "diagram-frame";
-    frame.src = url;
+    // 同一份大纲重画时文件名不变，加个参数逼浏览器重新拉一遍，别拿旧的糊弄
+    frame.src = url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
     frame.title = "学习路线图";
     box.replaceChildren(frame);
     box.hidden = false;
@@ -2909,7 +3167,8 @@
           title: node.title,
           brief: node.brief || "",
           deps: node.deps || [],
-          links: node.links || []
+          links: node.links || [],
+          done: Boolean(node.done)
         }))
       });
       return (payload && payload.result) || { ok: false, error: "后端没回话。" };
@@ -2943,8 +3202,7 @@
     return parts.join(" · ");
   }
 
-  function wireWizard() {
-    const sheet = wzField("goal-sheet");
+  function wireWizard() {    const sheet = wzField("goal-sheet");
     if (!sheet) return;
     const fab = wzField("fab-new-goal");
     if (fab) fab.addEventListener("click", () => openWizard(""));
@@ -2952,6 +3210,27 @@
     if (next) next.addEventListener("click", wizardNext);
     const back = wzField("wz-back");
     if (back) back.addEventListener("click", () => gotoStep(wizard.step - 1));
+    const send = wzField("wz-chat-send");
+    if (send) send.addEventListener("click", askWizardChat);
+    const chat = wzField("wz-chat-text");
+    if (chat) {
+      chat.addEventListener("keydown", (event) => {
+        // 回车换行，Ctrl/⌘ + 回车才是发出去
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          askWizardChat();
+        }
+      });
+    }
+    document.querySelectorAll("#wz-modes .wz-mode").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        wizard.mode = btn.dataset.wzMode === "paste" ? "paste" : "guide";
+        setWzStatus("");
+        wizardPane();
+        const field = wzField(wizard.mode === "paste" ? "wz-paste" : "wz-title");
+        if (field) field.focus();
+      });
+    });
     sheet.addEventListener("click", (event) => {
       if (event.target === sheet || event.target.closest("[data-sheet-close]")) closeWizard();
     });
@@ -3214,6 +3493,34 @@
   });
   document.addEventListener("spasre:backend", (event) => {
     if (event && event.detail && event.detail.online) ensureScheduled();
+  });
+
+  // 路线图节点面板上的「笔记」按钮：图在 iframe 里，点了会把节点 id 递过来。
+  // 图是在哪张卡上画的 → 这页最清楚：卡片的 diagram-box 上记着 goalId。
+  window.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.source !== "goalweave-roadmap" || data.type !== "note") return;
+    const name = String(data.nodeId || "");
+    if (!name) return;
+    const frame = Array.from(document.querySelectorAll(".diagram-frame")).find((item) => {
+      try {
+        return item.contentWindow === event.source;
+      } catch (error) {
+        return false;
+      }
+    });
+    if (!frame) return;
+    const box = frame.closest(".goal-diagram-box");
+    const wizardBox = frame.closest("#wz-diagram-box");
+    const goalId = (box && box.dataset.id) || (wizardBox ? wizard.goalId : "");
+    const goal = goalId ? api.goal(goalId) : null;
+    const node = goal ? (goal.nodes || []).find((item) => item.id === name) : null;
+    if (typeof api.openNote !== "function") return;
+    api.openNote({
+      goalId: goalId,
+      nodeId: name,
+      title: (node && node.title) || String(data.title || "") || "新笔记"
+    });
   });
 
   window.spasreGoals = {

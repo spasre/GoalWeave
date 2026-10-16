@@ -158,7 +158,14 @@
     render();
   }
 
-  // 后端探活完成再判断；纯静态（没后端）就等一下本地那份
-  document.addEventListener("spasre:backend", () => maybeStart());
-  window.setTimeout(() => maybeStart(), 1200);
+  // 后端探活完成再判断；而且得等数据比对完 —— 探活（/api/health）往往比取数据（/api/data）
+  // 先回来，本地还是空的那一会儿判断，会把已经有数据的库误判成新用户。纯静态（没后端）也一样等。
+  function decide() {
+    const ready = api.whenReady ? api.whenReady() : Promise.resolve();
+    // 后端不应答时别一直干等，最多 2.5 秒
+    const giveUp = new Promise((resolve) => window.setTimeout(resolve, 2500));
+    Promise.race([ready, giveUp]).then(maybeStart, maybeStart);
+  }
+  document.addEventListener("spasre:backend", decide);
+  window.setTimeout(decide, 1200);
 })();

@@ -33,7 +33,6 @@
   <div class="page">
     <header class="site-header">
       <a class="wordmark" href="index.html" aria-label="任务板，返回首页">
-        <span class="mark" aria-hidden="true">s</span>
         <span>任务板</span>
       </a>
       <div class="header-tools">
@@ -42,6 +41,7 @@
           <a href="schedule.html">日程表</a>
           <a href="tasks.html">任务</a>
           <a href="goals.html" aria-current="page">目标</a>
+          <a href="notes.html">笔记</a>
           <a href="settings.html">设置</a>
         </nav>
         <div class="header-actions">
@@ -97,15 +97,37 @@
       </ol>
 
       <div class="wizard-body">
+        <p class="task-hint" id="wz-status" role="status" aria-live="polite"></p>
+
         <section class="wizard-step" data-step="1">
-          <label class="task-field task-field-wide">
-            <span>学习目标</span>
-            <input class="task-input" type="text" id="wz-title" placeholder="例如：学会写 LLVM 优化 pass">
-          </label>
-          <label class="task-field task-field-wide">
-            <span>补充说明</span>
-            <input class="task-input" type="text" id="wz-detail" placeholder="可选">
-          </label>
+          <div class="wz-modes" id="wz-modes" role="tablist" aria-label="怎么定这份计划">
+            <button class="wz-mode is-on" type="button" role="tab" data-wz-mode="guide">先定方向</button>
+            <button class="wz-mode" type="button" role="tab" data-wz-mode="paste">粘贴现成规划</button>
+          </div>
+
+          <div class="wz-pane" id="wz-pane-guide">
+            <label class="task-field task-field-wide">
+              <span>学习目标</span>
+              <input class="task-input" type="text" id="wz-title" placeholder="例如：学会写 LLVM 优化 pass">
+            </label>
+            <label class="task-field task-field-wide">
+              <span>补充说明</span>
+              <input class="task-input" type="text" id="wz-detail" placeholder="可选：现在什么水平、想学到哪一步">
+            </label>
+            <p class="task-hint" id="wz-guide-hint">下一步先出大纲和建议的完成时间，你可以在第三步跟助手一句句改。</p>
+          </div>
+
+          <div class="wz-pane" id="wz-pane-paste" hidden>
+            <label class="task-field task-field-wide">
+              <span>把那份规划贴进来</span>
+              <textarea class="task-textarea wz-paste" id="wz-paste" rows="8" placeholder="在别处（另一个 AI、教程、课程安排）聊好的规划，整段复制过来。"></textarea>
+            </label>
+            <label class="task-field task-field-wide">
+              <span>目标名（可选）</span>
+              <input class="task-input" type="text" id="wz-paste-title" placeholder="留空就用文字里的，比如「学习目标：…」那行">
+            </label>
+            <p class="task-hint" id="wz-paste-hint">助手读一遍，拆成知识点，并把前后关系、文字里提到的时间带出来。</p>
+          </div>
         </section>
 
         <section class="wizard-step" data-step="2" hidden>
@@ -119,11 +141,19 @@
               <input class="task-input" type="number" id="wz-weekly" min="1" max="60" step="1" value="7">
             </label>
           </div>
+          <p class="task-hint" id="wz-deadline-hint"></p>
         </section>
 
         <section class="wizard-step" data-step="3" hidden>
-          <p class="task-hint" id="wz-status"></p>
           <div id="wz-outline"></div>
+          <div class="wz-chat" id="wz-chat" hidden>
+            <div class="wz-chat-log" id="wz-chat-log"></div>
+            <div class="wz-chat-send">
+              <textarea class="task-textarea" id="wz-chat-text" rows="2" placeholder="说要改什么，例如：把「调用约定」拆成两条；太细了，合并一下；第 3 条往前挪"></textarea>
+              <button class="task-submit" type="button" id="wz-chat-send">改一版</button>
+            </div>
+          </div>
+          <p class="task-hint" id="wz-chat-hint" hidden></p>
           <div class="diagram-box" id="wz-diagram-box" hidden></div>
           <ul class="node-editor" id="wz-nodes"></ul>
         </section>

@@ -45,6 +45,8 @@ WIDE_PX = 13.0
 CANVAS_W_BUDGET = 1395
 CELL_W_MIN = NODE_W + 8
 GAP_X_MIN = 16
+# Archify 的 schema 底线：画布宽度不能小于这个（一列到底的直线图会算得更窄）
+MIN_VIEW_W = 320
 # 每层换一个组件类型，靠颜色把「第几步」区分开
 LEVEL_TYPES = ["frontend", "backend", "messagebus", "database", "cloud", "security", "external"]
 
@@ -71,7 +73,7 @@ SKILL = {
     "tags": ["绘图", "知识点", "路线图"],
     "params": {
         "title": "图标题",
-        "nodes": "知识点数组：[{id, title, short, deps, level, links}]",
+        "nodes": "知识点数组：[{id, title, short, deps, level, links, done}]（done 的节点会标成绿的「已完成」）",
         "cards": "图下面的清单：links（标题+教程链接）/ titles（只列标题）/ none（不放）",
         "level_labels": "每一层的名字，比如 ['基础', '核心', '进阶']",
         "name": "输出文件名（不含扩展名），默认按标题生成",
@@ -135,6 +137,7 @@ def normalize(nodes):
             "level": raw.get("level"),
             "links": [link for link in (raw.get("links") or []) if isinstance(link, dict) and link.get("url")],
             "brief": str(raw.get("brief") or "").strip(),
+            "done": bool(raw.get("done")),
         })
     known = {item["id"] for item in clean}
     for item in clean:
@@ -356,8 +359,12 @@ def build_candidate(title, nodes, options):
     labels = [str(item) for item in (options.get("level_labels") or [])]
     subtitle = str(options.get("subtitle") or "").strip() or ("共 " + str(len(nodes)) + " 个知识点")
 
-    view_w = columns * cell_w + (columns - 1) * gap_x + PAD * 2
+    content_w = columns * cell_w + (columns - 1) * gap_x
+    # Archify 的 schema 要求画布宽度 ≥ 320：知识点少的直线图（一列）算出来会比这还窄，
+    # 撑到最低宽度，多出来的空白平摊到两边，图不至于贴在左边。
+    view_w = max(content_w + PAD * 2, MIN_VIEW_W)
     view_h = height * CELL_H + max(height - 1, 0) * GAP_Y + PAD * 2
+    pad_x = round((view_w - content_w) / 2)
 
     # 图例本来是架构图那套词（前端 / 后端 / 消息总线），学习路线图里得换成自己的层名。
     # 层数一多，图例就要好几排，挤不下（legend/vertical-overflow）时干脆收起来。
@@ -379,6 +386,9 @@ def build_candidate(title, nodes, options):
         depth = levels[item["id"]]
         label = item["short"] or fit_label(item["title"], NODE_W - 20)
         tag = labels[depth] if depth < len(labels) else ("第 " + str(depth + 1) + " 步")
+        # 做完的知识点标出来：小字那行换成「✓ 已完成」，颜色交给注入的 CSS 去点绿
+        if item.get("done"):
+            tag = "✓ 已完成"
         detail = item["brief"] or ("" if label == item["title"] else item["title"])
         components.append({
             "id": item["id"],
@@ -436,33 +446,103 @@ def build_candidate(title, nodes, options):
             "viewBox": [round(view_w, 1), round(view_h, 1)],
         },
         "layout": {"mode": "grid", "cols": columns, "cellW": cell_w, "cellH": CELL_H,
-                   "gapX": gap_x, "gapY": GAP_Y, "origin": [PAD, PAD]},
+                   "gapX": gap_x, "gapY": GAP_Y, "origin": [pad_x, PAD]},
         "components": components,
         "connections": connections,
         "cards": cards,
     }, crossings
 
 
-def inject_text_scale(out_file, scale):
-    """把成品里的节点文字整体放大一点：Archify 量宽按 1.2em/汉字、真实字宽 1em，正好有这么多余量。"""
+DONE_CSS = """
+  /* 做完的知识点：描边和文字走绿色，角上那个 ✓ 也强制露出来
+     （Archify 的「阅读深度」默认只到 read，细注是藏着的，藏了就看不出做完了） */
+  svg [data-node-id="%(id)s"] rect:not(.c-mask) { stroke: %(color)s !important; stroke-width: 2.5 !important; }
+  svg [data-node-id="%(id)s"] text.t-primary,
+  svg [data-node-id="%(id)s"] text[data-detail="fine"] { fill: %(color)s !important; opacity: 1 !important; }
+"""
+
+# 跟应用里 .month-dot[data-tone=done] 用的是同一个青绿（--teal）
+DONE_COLOR = "#2f6b68"
+
+EXTRAS_CSS = """<style id="roadmap-app-extras">
+  /* 节点点开那块「护照」：只留标题和一句说明 —— 种类 / id / 出向入向 / 可达范围都收掉 */
+  #focus-passport-meta, #focus-summary, #focus-reach { display: none !important; }
+%(done)s</style>"""
+
+NOTE_SCRIPT = """<script id="goalweave-note-button">
+/* 在节点那块面板上加一个「笔记」：在应用里就告诉父窗口（它知道这是哪个目标），
+   单独打开这张图时就直接开笔记页。 */
+(() => {
+  let focused = "";
+  document.addEventListener("click", (event) => {
+    const node = event.target && event.target.closest ? event.target.closest("g[data-node-id]") : null;
+    if (node) focused = node.getAttribute("data-node-id") || "";
+  }, true);
+  function text(selector) {
+    const node = document.querySelector(selector);
+    return node ? String(node.textContent || "").trim() : "";
+  }
+  function decorate() {
+    const panel = document.getElementById("focus-chip");
+    if (!panel || panel.hidden) return;
+    const actions = panel.querySelector(".relationship-lens-actions");
+    if (!actions || actions.querySelector("#btn-node-note")) return;
+    const button = document.createElement("button");
+    button.id = "btn-node-note";
+    button.type = "button";
+    button.textContent = "笔记";
+    button.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
+    button.addEventListener("click", () => {
+      const id = focused || text("#focus-id");
+      const title = text("#focus-label");
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ source: "goalweave-roadmap", type: "note", nodeId: id, title: title }, "*");
+        return;
+      }
+      window.open("../notes.html?node=" + encodeURIComponent(id) + "&title=" + encodeURIComponent(title), "_blank");
+    });
+    actions.insertBefore(button, actions.firstChild);
+  }
+  function start() {
+    new MutationObserver(decorate).observe(document.body, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"],
+    });
+    decorate();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+  else start();
+})();
+</script>"""
+
+
+def inject_extras(out_file, scale, done_ids):
+    """画好之后往成品里补两样东西（都在 Archify 的校验之后，动它不会让图不过）：
+
+    1. 一点样式：做完的知识点点绿、「护照」面板里那些种类 / id / 出向入向 / 可达范围收掉，
+       节点文字顺手放大一点（Archify 按 1.2em/汉字量宽，真实字宽 1em，正好有这么多余量）。
+    2. 一个「笔记」按钮：挂在节点面板上（脚本很小，跟着 DOM 变化自己贴上去）。
+    """
     try:
         factor = float(scale) if scale not in (None, "") else FONT_SCALE
     except (TypeError, ValueError):
         factor = FONT_SCALE
     factor = max(1.0, min(1.4, factor))
-    if factor <= 1.001:
-        return 1.0
     html = out_file.read_text(encoding="utf-8")
-    if 'id="roadmap-text-scale"' in html:
-        return factor
-    css = TEXT_CSS % {
-        "label": 11.0 * factor,
-        "sub": 9.0 * factor,
-        "tag": 7.0 * factor,
-        "cardtitle": 15.0 * factor,
-        "carditem": 13.0 * factor,
-    }
-    html = html.replace("</head>", css + "</head>", 1) if "</head>" in html else html + css
+    if 'id="roadmap-app-extras"' not in html:
+        css = TEXT_CSS % {
+            "label": 11.0 * factor,
+            "sub": 9.0 * factor,
+            "tag": 7.0 * factor,
+            "cardtitle": 15.0 * factor,
+            "carditem": 13.0 * factor,
+        } if factor > 1.001 else ""
+        done_css = "".join(
+            DONE_CSS % {"id": ident, "color": DONE_COLOR} for ident in sorted(set(done_ids or []))
+        )
+        css += EXTRAS_CSS % {"done": done_css}
+        html = html.replace("</head>", css + "</head>", 1) if "</head>" in html else html + css
+    if "goalweave-note-button" not in html:
+        html = html.replace("</body>", NOTE_SCRIPT + "</body>", 1) if "</body>" in html else html + NOTE_SCRIPT
     out_file.write_text(html, encoding="utf-8")
     return round(factor, 2)
 
@@ -552,15 +632,20 @@ def run(params, ctx):
         }
         if result["ok"]:
             break
-        result["error"] = "Archify 没过校验，看 diagnostics。"
+        # 说清是哪条校验没过：只说「看 diagnostics」等于没说
+        first = (result.get("diagnostics") or [{}])[0]
+        detail = str((first or {}).get("message") or "").strip()
+        result["error"] = "Archify 没过校验：" + detail if detail else "Archify 没过校验，看 diagnostics。"
         result["stdout"] = (proc.stdout or "")[:4000]
         result["stderr"] = (proc.stderr or "")[:2000]
 
     if result["ok"]:
         result.pop("stdout", None)
         result.pop("error", None)
-        scale = inject_text_scale(out_file, options.get("font_scale"))
+        scale = inject_extras(out_file, options.get("font_scale"),
+                              [item["id"] for item in nodes if item.get("done")])
         result["font_scale"] = scale
+        result["done"] = len([item for item in nodes if item.get("done")])
         ctx.log("画好了：" + result["url"] + "（" + str(result["seconds"]) + " 秒，文字 ×" + str(scale) + "）")
     else:
         ctx.log("没过校验：" + json.dumps(result.get("diagnostics") or [], ensure_ascii=False)[:400])
