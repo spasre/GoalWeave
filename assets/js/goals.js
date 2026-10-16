@@ -951,7 +951,8 @@
       if (config.only && goal.id !== config.only) return;
       const nodes = goal.nodes || [];
       if (nodes.length === 0) return;
-      const waiting = nodes.filter((node) => !planned.has(goal.id + "/" + node.id));
+      // 做完的节点是历史，不能再被搬走（否则「按周补时段」这种自动补排会把它推到未来去）
+      const waiting = nodes.filter((node) => !node.done && !planned.has(goal.id + "/" + node.id));
       if (waiting.length === 0) return;
       const days = planDays(goal.startDate, goal.deadline);
       const hours = hoursPerNode(goal, nodes.length, days.length);
@@ -3189,11 +3190,11 @@
   /* ---------- boot ---------- */
 
   // 之前排好的节点只有日期、没有时段（那时候一天一段），或者挂在一个已经删掉的段上：
-  // 补一次，日程表才是对的。后端的存储可能在页面加载后才被采纳（bootRemote 是异步的），
-  // 所以后端上线、数据变化时都再看一眼。
+  // 补一次，日程表才是对的。今天之前的不算（过去的日子补时段没意义，还会把做完的节点搬走）。
+  // 后端的存储可能在页面加载后才被采纳（bootRemote 是异步的），所以后端上线、数据变化时都再看一眼。
   function ensureScheduled() {
     const loose = api.goals().some((goal) =>
-      (goal.nodes || []).some((node) => node.date && !api.segment(node.slot))
+      (goal.nodes || []).some((node) => node.date >= api.today() && !node.done && !api.segment(node.slot))
     );
     if (loose) planSchedule();
   }

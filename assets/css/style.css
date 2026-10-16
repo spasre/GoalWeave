@@ -2534,7 +2534,8 @@ html { overflow-x: clip; }
 
 .month-dot[data-tone="planned"] { background: var(--brand); }
 
-.month-dot[data-tone="done"] { background: var(--ok); }
+/* 做完了要看得出来是「绿」：--ok 跟 --brand 几乎同色，这里单独用青绿 */
+.month-dot[data-tone="done"] { background: var(--teal); }
 
 .month-dot[data-tone="late"] { background: var(--danger); }
 

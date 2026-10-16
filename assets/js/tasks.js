@@ -33,6 +33,8 @@
     "复习寄存器分配与指令选择的基本流程"
   ];
   const LINK_LIMIT = 3;
+  // 延伸阅读得靠后端调模型：后端没在跑时统一给这句，别让人对着「连不上后端（/api/…）」发呆
+  const NO_BACKEND_NOTE = "本机后端没在跑 —— 延伸阅读要靠它调模型，起一下 serve.ps1 再点。";
   const CHAT_LIMIT = 40;
   const DAILY_SEEN_LIMIT = 40;
   const DEFAULT_SETTINGS = {
@@ -679,6 +681,10 @@
       schedule: {
         busy: Array.isArray(parsed.schedule && parsed.schedule.busy)
           ? parsed.schedule.busy.map((item) => String(item || "")).filter((item) => /^\d{4}-\d{2}-\d{2}:/.test(item)).slice(-400)
+          : [],
+        // 「每周这一天」的非空闲（默认口径，形如 "4:evening"）：漏了它，用户划掉的忙时下次打开就没了
+        busyWeekly: Array.isArray(parsed.schedule && parsed.schedule.busyWeekly)
+          ? parsed.schedule.busyWeekly.map((item) => String(item || "")).filter((item) => /^[1-7]:/.test(item)).slice(-70)
           : []
       }
     };
@@ -983,7 +989,7 @@
   async function askReadingLinks(title, context) {
     const bridge = window.spasreBackend;
     if (!bridge || typeof bridge.run !== "function" || !bridge.online) {
-      return { ok: false, error: "本机后端没在跑，没法让助手找。" };
+      return { ok: false, error: NO_BACKEND_NOTE };
     }
     const info = context || {};
     try {
@@ -998,6 +1004,9 @@
       if (!result.ok) return { ok: false, error: String(result.error || "没找着。") };
       return { ok: true, links: normalizeLinks(result.links) };
     } catch (error) {
+      // 请求到一半后端没了：再探一次，弹窗里的提示才说得准
+      const alive = typeof bridge.available === "function" ? await bridge.available() : false;
+      if (!alive) return { ok: false, error: NO_BACKEND_NOTE };
       return { ok: false, error: error && error.message ? error.message : String(error) };
     }
   }
@@ -1050,6 +1059,19 @@
     return overlay;
   }
 
+  // 后端在不在：延伸阅读全靠它调模型，提示得分清「后端没起」和「助手没配」
+  function backendOffline() {
+    return !(window.spasreBackend && window.spasreBackend.online);
+  }
+
+  // 弹窗顶上的状态行：没话说就整条收起来，不留一段空白
+  function setLinkNote(text) {
+    const note = linkDialog ? linkDialog.querySelector("[data-role=link-note]") : null;
+    if (!note) return;
+    note.textContent = text || "";
+    note.hidden = !text;
+  }
+
   function openLinkDialog(task) {
     if (!task) return false;
     const stored = linksForTask(task);
@@ -1067,7 +1089,6 @@
     const config = options || {};
     const overlay = ensureLinkDialog();
     const heading = overlay.querySelector("#task-link-dialog-title");
-    const note = overlay.querySelector("[data-role=link-note]");
     const list = overlay.querySelector("[data-role=link-list]");
     const ask = overlay.querySelector("[data-role=link-ask]");
     const items = normalizeLinks(links);
@@ -1091,14 +1112,13 @@
         ? "让助手按标题找几条资料（每条都会先验证能不能打开）"
         : "还没配上助手 —— 到设置页填一下模型接口和密钥";
     }
-    if (note) {
-      note.textContent =
-        items.length > 0
-          ? config.note || "助手找的，链接都验证过打得开，点开是新窗口。"
-          : canAsk
-            ? "正在让助手找…"
-            : config.empty || "还没有资料。到设置页把助手配上，就能让它按题目找资料（每条都会先验证能不能打开）。";
+    let line = config.note || "";
+    if (items.length === 0) {
+      if (canAsk) line = "正在让助手找…";
+      else if (backendOffline()) line = NO_BACKEND_NOTE;
+      else line = config.empty || "还没有资料。到设置页把助手配上，就能让它按题目找资料（每条都会先验证能不能打开）。";
     }
+    setLinkNote(line);
     fillLinkList(items);
 
     linkDialogReturn = document.activeElement;
@@ -1119,26 +1139,25 @@
     if (!overlay) return;
     const context = linkDialogContext;
     const token = (linkAskToken += 1);
-    const note = overlay.querySelector("[data-role=link-note]");
     const ask = overlay.querySelector("[data-role=link-ask]");
     if (ask) ask.disabled = true;
-    if (note) note.textContent = "正在让助手找 —— 它还会挨个验证链接能不能打开，可能要十几秒…";
+    setLinkNote("正在让助手找 —— 它还会挨个验证链接能不能打开，可能要十几秒…");
 
     const answer = await askReadingLinks(context.title, context);
     if (token !== linkAskToken || overlay.hidden) return; // 又点了一次、或者已经关掉了：这次结果作废
     if (ask) ask.disabled = false;
 
     if (!answer.ok) {
-      if (note) note.textContent = answer.error + "（也可以把标题写具体一点，再去目录里碰碰运气）";
+      setLinkNote(answer.error);
       return;
     }
     if (answer.links.length === 0) {
-      if (note) note.textContent = "助手没找到能打开的链接 —— 换个更具体的标题或补一句说明，再让它找一次。";
+      setLinkNote("助手没找到能打开的链接 —— 换个更具体的标题或补一句说明，再让它找一次。");
       return;
     }
     fillLinkList(answer.links);
     if (ask) ask.textContent = "换一批资料";
-    if (note) note.textContent = "助手找的，链接都验证过打得开，点开是新窗口。";
+    setLinkNote(""); // 链接就在眼前，不用再说一句「验证过、新窗口打开」
     if (context.taskId) {
       const task = store.tasks.concat(store.trash).find((item) => item.id === context.taskId);
       if (task) {
