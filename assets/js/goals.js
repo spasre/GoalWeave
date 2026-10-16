@@ -742,6 +742,9 @@
     // 重画卡片时把原来那个 iframe 接过来用：不然每次数据一变，图都要重新加载一遍
     if (reused && reused.dataset.url === goal.diagram) {
       reused.hidden = folded;
+      // 图上「做完的」标记是按当前节点状态画的，节点刚勾掉的话顺手刷一遍
+      const live = reused.querySelector(".diagram-frame");
+      if (live) decorateDiagramFrame(live, goal);
       return reused;
     }
     const box = el("div", "goal-diagram-box");
@@ -758,7 +761,115 @@
     frame.src = goal.diagram;
     frame.title = goal.title + "：学习路线图";
     frame.loading = "lazy";
+    // 图里那个节点面板是给架构图设计的，加载完在应用里收拾一下（旧图也能跟上，不用重画）
+    frame.addEventListener("load", () => decorateDiagramFrame(frame, goal));
     return frame;
+  }
+
+  // 跟 skills/diagram_roadmap.py 里 EXTRAS_CSS / DONE_CSS 是一对，改一边记得改另一边
+  const DIAGRAM_HIDE_CSS = [
+    ".relationship-lens-eyebrow,",   /* 「语义护照」 */
+    "#focus-passport-meta,",         /* 种类 / 架构组件 / 第 N 步 / m1 */
+    "#focus-summary,",               /* N 条出向 · M 条入向 */
+    "#focus-evidence,",              /* 已核验来源 */
+    "#focus-reach,",                 /* 编写可达范围 上游 / 下游 */
+    "#btn-focus-relations,",         /* 「N 条关系」 */
+    "#relationship-lens-list { display: none !important; }"  /* 关系列表 */
+  ].join("\n");
+
+  const DIAGRAM_DONE_COLOR = "#2f6b68"; // 跟 App 里的 --teal、技能里的 DONE_COLOR 同色
+  const wiredDiagramDocs = new WeakSet();
+
+  function diagramFrameCss(goal) {
+    const done = (goal && goal.nodes ? goal.nodes : [])
+      .filter((node) => node.done)
+      .map((node) => String(node.id || "").replace(/[^A-Za-z0-9_-]/g, ""))
+      .filter(Boolean);
+    const rules = done.map(
+      (id) =>
+        'svg [data-node-id="' + id + '"] rect:not(.c-mask) { stroke: ' + DIAGRAM_DONE_COLOR +
+        ' !important; stroke-width: 2.5 !important; }\n' +
+        'svg [data-node-id="' + id + '"] text.t-primary,\n' +
+        'svg [data-node-id="' + id + '"] text[data-detail="fine"] { fill: ' + DIAGRAM_DONE_COLOR +
+        ' !important; opacity: 1 !important; }'
+    );
+    return DIAGRAM_HIDE_CSS + "\n" + rules.join("\n");
+  }
+
+  // 图在 iframe 里，跟应用同一个 origin —— 生成时注入过的那份只对新图有效，
+  // 早先生成好、还挂在目标卡上的图得在这儿补一次（手上的旧图不用重画）。
+  function decorateDiagramFrame(frame, goal) {
+    let doc = null;
+    try {
+      doc = frame.contentDocument;
+    } catch (error) {
+      return; // 跨域的话（同源部署不会）就当没这回事
+    }
+    if (!doc || !doc.head || !doc.body) return;
+
+    let style = doc.getElementById("goalweave-frame-style");
+    if (!style) {
+      style = doc.createElement("style");
+      style.id = "goalweave-frame-style";
+      doc.head.append(style);
+    }
+    style.textContent = diagramFrameCss(goal);
+
+    // 生成时那份脚本已经贴过一个「笔记」按钮了，别贴第二个
+    if (doc.getElementById("btn-node-note") || wiredDiagramDocs.has(doc)) return;
+    wiredDiagramDocs.add(doc);
+
+    let focused = "";
+    doc.addEventListener(
+      "click",
+      (event) => {
+        const node = event.target && event.target.closest ? event.target.closest("g[data-node-id]") : null;
+        if (node) focused = node.getAttribute("data-node-id") || "";
+      },
+      true
+    );
+    const read = (selector) => {
+      const node = doc.querySelector(selector);
+      return node ? String(node.textContent || "").trim() : "";
+    };
+    const decorate = () => {
+      const panel = doc.getElementById("focus-chip");
+      if (!panel || panel.hidden) return;
+      const actions = panel.querySelector(".relationship-lens-actions");
+      if (!actions || actions.querySelector("#btn-node-note")) return;
+      const button = doc.createElement("button");
+      button.id = "btn-node-note";
+      button.type = "button";
+      button.textContent = "笔记";
+      button.title = "给这个知识点记一笔：有笔记就打开，没有就新建";
+      button.addEventListener("click", () => {
+        const nodeId = focused || read("#focus-id");
+        if (nodeId) openNodeNote(frame, nodeId, read("#focus-label"));
+      });
+      actions.insertBefore(button, actions.firstChild);
+    };
+    new MutationObserver(decorate).observe(doc.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["hidden"]
+    });
+    decorate();
+  }
+
+  // 打开某一个知识点的笔记：有就打开，没有就新建，并记上「哪个目标的哪个节点」
+  function openNodeNote(frame, nodeId, title) {
+    if (!nodeId || typeof api.openNote !== "function") return;
+    const box = frame.closest(".goal-diagram-box");
+    const wizardBox = frame.closest("#wz-diagram-box");
+    const goalId = (box && box.dataset.id) || (wizardBox ? wizard.goalId : "");
+    const goal = goalId ? api.goal(goalId) : null;
+    const node = goal ? (goal.nodes || []).find((item) => item.id === nodeId) : null;
+    api.openNote({
+      goalId: goalId,
+      nodeId: nodeId,
+      title: (node && node.title) || String(title || "") || "新笔记"
+    });
   }
 
   function toggleGoalDiagram(button) {
@@ -3127,6 +3238,7 @@
     // 同一份大纲重画时文件名不变，加个参数逼浏览器重新拉一遍，别拿旧的糊弄
     frame.src = url + (url.indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
     frame.title = "学习路线图";
+    frame.addEventListener("load", () => decorateDiagramFrame(frame, wizard.goalId ? api.goal(wizard.goalId) : null));
     box.replaceChildren(frame);
     box.hidden = false;
   }
@@ -3510,17 +3622,7 @@
       }
     });
     if (!frame) return;
-    const box = frame.closest(".goal-diagram-box");
-    const wizardBox = frame.closest("#wz-diagram-box");
-    const goalId = (box && box.dataset.id) || (wizardBox ? wizard.goalId : "");
-    const goal = goalId ? api.goal(goalId) : null;
-    const node = goal ? (goal.nodes || []).find((item) => item.id === name) : null;
-    if (typeof api.openNote !== "function") return;
-    api.openNote({
-      goalId: goalId,
-      nodeId: name,
-      title: (node && node.title) || String(data.title || "") || "新笔记"
-    });
+    openNodeNote(frame, name, data.title);
   });
 
   window.spasreGoals = {

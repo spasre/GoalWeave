@@ -465,8 +465,17 @@ DONE_CSS = """
 DONE_COLOR = "#2f6b68"
 
 EXTRAS_CSS = """<style id="roadmap-app-extras">
-  /* 节点点开那块「护照」：只留标题和一句说明 —— 种类 / id / 出向入向 / 可达范围都收掉 */
-  #focus-passport-meta, #focus-summary, #focus-reach { display: none !important; }
+  /* 节点点开那块面板是给架构图设计的，学习路线图只留标题和一句说明：
+     「语义护照」这个小标题、种类 / 架构组件 / id 那一排、「N 条出向 · M 条入向」、
+     「编写可达范围 上游/下游」、关系按钮和关系列表、已核验来源 —— 全收掉。
+     应用里还会再注入一份同样的（goals.js 的 decorateDiagramFrame），那是给早先生成好的旧图补的。 */
+  .relationship-lens-eyebrow,
+  #focus-passport-meta,
+  #focus-summary,
+  #focus-evidence,
+  #focus-reach,
+  #btn-focus-relations,
+  #relationship-lens-list { display: none !important; }
 %(done)s</style>"""
 
 NOTE_SCRIPT = """<script id="goalweave-note-button">
@@ -518,9 +527,13 @@ NOTE_SCRIPT = """<script id="goalweave-note-button">
 def inject_extras(out_file, scale, done_ids):
     """画好之后往成品里补两样东西（都在 Archify 的校验之后，动它不会让图不过）：
 
-    1. 一点样式：做完的知识点点绿、「护照」面板里那些种类 / id / 出向入向 / 可达范围收掉，
-       节点文字顺手放大一点（Archify 按 1.2em/汉字量宽，真实字宽 1em，正好有这么多余量）。
+    1. 一点样式：做完的知识点点绿、节点面板上那些给架构图用的东西（语义护照 / 种类 / id /
+       出向入向 / 可达范围 / 关系）收掉，节点文字顺手放大一点（Archify 按 1.2em/汉字量宽，
+       真实字宽 1em，正好有这么多余量）。
     2. 一个「笔记」按钮：挂在节点面板上（脚本很小，跟着 DOM 变化自己贴上去）。
+
+    这两样只对「生成之后」的图生效；应用里打开旧图时，goals.js 会再注入一份同样的（同一个 origin，
+    能直接改 iframe 里的 DOM），所以手上已经存着的老图也不用重画。
     """
     try:
         factor = float(scale) if scale not in (None, "") else FONT_SCALE

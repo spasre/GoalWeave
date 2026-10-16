@@ -138,12 +138,20 @@ python server.py --skill diagram.roadmap --params-file roadmap.json
 画完之后还会往成品 HTML 里补三段东西（`inject_extras`，在 Archify 校验**之后**做，所以不会把图弄
 成不过校验）：
 
-- **已完成的知识点**：`nodes[].done` 为真的节点，角标换成「✓ 已完成」，描边和标题点成青绿色。
-- **节点面板减负**：Archify 自带的「种类 / id」chips、`N 条出向 · M 条入向`、`编写可达范围 上游/下游`
-  三块对学习路线图是噪音，直接 CSS 藏掉，只留标题、说明和关系。
+- **已完成的知识点**：`nodes[].done` 为真的节点，角标换成「✓ 已完成」，描边和标题点成青绿色
+  （「✓ 已完成」那行是 Archify 的细注，默认深浅层级下是 `opacity: 0` 的，所以还要 `opacity: 1 !important` 顶开）。
+- **节点面板减负**：Archify 那块面板是给架构图设计的，学习路线图只留标题和一句说明 ——「语义护照」小标题、
+  `#focus-passport-meta`（种类 / 架构组件 / 第 N 步 / m1）、`#focus-summary`（N 条出向 · M 条入向）、
+  `#focus-reach`（编写可达范围 上游/下游）、`#btn-focus-relations`、`#relationship-lens-list`、`#focus-evidence`
+  全部 `display: none`，然后在按钮排头插一个「笔记」。
 - **面板上加「笔记」按钮**：插在关系按钮前面。在应用里点它，按钮 `postMessage({source:"goalweave-roadmap", type:"note", nodeId, title})`
   给父页面，`goals.js` 收到后按 `goalId + nodeId` 打开或新建笔记；如果这张图是被单独打开的（没有父页
   面），就 `window.open` 到 `notes.html?node=…&title=…`。
+- **上面这些，应用里也会再补一份**：生成时注入只对「这一版之后画的图」生效，手上早先画好的图不会自己变；
+  而图跟应用同源，`goals.js` 的 `decorateDiagramFrame()` 在 iframe `load` 之后（以及每次重画卡片时）
+  往 `iframe.contentDocument` 里塞同一份样式、同一个按钮，所以**老图不用重画**就能跟上。改这份 CSS 时
+  两边（`goals.js` 的 `DIAGRAM_HIDE_CSS` / `diagram_roadmap.py` 的 `EXTRAS_CSS`）要一起改。
+  做完的绿标也走这条：`diagramFrameCss(goal)` 按当前节点状态现生成，勾掉一个知识点不用等重画图。
 
 ### 技能怎么被用上
 

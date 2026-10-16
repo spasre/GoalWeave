@@ -2811,6 +2811,12 @@
       item.append(body);
 
       const actions = el("div", "task-actions");
+      const note = el("button", "task-action", "笔记");
+      note.type = "button";
+      note.dataset.action = "task-note";
+      note.dataset.id = task.id;
+      note.title = "这条的笔记：有就打开，没有就新建一篇";
+      if (noteFor({ taskId: task.id })) note.classList.add("is-on");
       const restore = el("button", "task-action", "恢复");
       restore.type = "button";
       restore.dataset.action = "restore";
@@ -2819,7 +2825,7 @@
       purge.type = "button";
       purge.dataset.action = "purge";
       purge.dataset.id = task.id;
-      actions.append(restore, purge);
+      actions.append(note, restore, purge);
       item.append(actions);
       list.append(item);
     });
