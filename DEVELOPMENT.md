@@ -73,6 +73,7 @@ def run(params, ctx):
 | `text.translate` | 让模型翻译 | 是 |
 | `interest.suggest` | 兴趣标签的参谋：`mode=preset` 给一批预设方向，`mode=related` 按现有标签推 5 个相关的 | 否（没配模型就用内置词库） |
 | `diagram.roadmap` | 知识点 + 依赖关系 → 一张能缩放、能导出的学习路线图 HTML（`diagrams/`） | 否 |
+| `plan.outline` | `mode=revise` 按一句话改一版大纲；`mode=import` 把别处聊好的规划整段读成知识点（没配模型时 import 退回按行拆） | 是 |
 
 ### 学习路线图（`diagram.roadmap` + Archify）
 
@@ -134,6 +135,16 @@ python server.py --skill diagram.roadmap --params-file roadmap.json
 它需要 **Node.js ≥ 18**（Archify 是 Node 写的），没装 node 会直接报错。第三方代码在
 `skills/vendor/archify`（MIT，v3.0.1），许可证原文在那一层里。
 
+画完之后还会往成品 HTML 里补三段东西（`inject_extras`，在 Archify 校验**之后**做，所以不会把图弄
+成不过校验）：
+
+- **已完成的知识点**：`nodes[].done` 为真的节点，角标换成「✓ 已完成」，描边和标题点成青绿色。
+- **节点面板减负**：Archify 自带的「种类 / id」chips、`N 条出向 · M 条入向`、`编写可达范围 上游/下游`
+  三块对学习路线图是噪音，直接 CSS 藏掉，只留标题、说明和关系。
+- **面板上加「笔记」按钮**：插在关系按钮前面。在应用里点它，按钮 `postMessage({source:"goalweave-roadmap", type:"note", nodeId, title})`
+  给父页面，`goals.js` 收到后按 `goalId + nodeId` 打开或新建笔记；如果这张图是被单独打开的（没有父页
+  面），就 `window.open` 到 `notes.html?node=…&title=…`。
+
 ### 技能怎么被用上
 
 技能不是给人点的按钮，是**各功能内部调用的能力**。页面上没有「跑技能」的入口，接法是这样：
@@ -145,6 +156,8 @@ python server.py --skill diagram.roadmap --params-file roadmap.json
 | 设置页的兴趣标签 | `interest.suggest` | `settings.js`：进来推预设，选了标签再推 5 个相关的；后端不在就用本地词库 |
 | 助手拆任务 / 问问题 | —（借后端的模型通道） | `tasks.js` 的 `bridgeChat()`：浏览器直连模型被跨域挡住时，改由后端代发 |
 | 延伸阅读 | `reading.suggest` | `tasks.js` 的 `askReadingLinks()`：打开弹窗时自动问一次（每日推荐也用它补资料），回来的链接存在任务上 |
+| 新建目标第三步改大纲 / 粘贴规划 | `plan.outline` | `goals.js` 的 `runOutlineSkill()`：`mode=revise` 把现有大纲 + 用户那句话交给它，`mode=import` 把贴进来的整段文字交给它；回来的 deps 写的是标题，走 `normalizeModelNodes` → `sanitizeNodes` 换成 id、去悬空依赖、断环 |
+| 任务卡 / 路线图节点上的「笔记」 | —（共用一份 store） | 任务卡走 `tasks.js` 的 `openNote()`；路线图在 iframe 里，节点面板上的按钮 `postMessage` 给父页面，`goals.js` 收到后按 `goalId + nodeId` 打开或新建笔记 |
 
 要加一个「能力型」功能，就在 `skills/` 里加个 `.py`，再到对应功能的代码里调它：
 
@@ -207,6 +220,19 @@ await spasreBackend.run("echo", { text: "hi" });
 
 `.env` 里有明文密钥；`os.chmod` 在 Windows 上不一定生效，别把这个文件同步到公开的地方。
 
+### 数据存在哪、切页和多标签怎么不打架
+
+看板数据落两份：浏览器 `localStorage["spasre-tasks-v1"]`（后端不在时的兜底副本）和后端 `config/data.json`
+（页面开着时以后端为准，每几秒拉一次 `rev`）。两处都写就有个「谁新听谁的」的问题，三条规矩：
+
+- **本地改动打脏标记**：`save()` 除了写本地，还往 `localStorage["spasre-tasks-dirty"]` 记一个**本地时间、秒级、
+  不带时区**的戳（和 Python 那边 `datetime.now().isoformat(timespec="seconds")` 同格式，直接字符串比大小
+  就行；JS 的 `toISOString()` 是 UTC，不能用）。推送成功才 `markClean()` 清掉。
+- **打开页面时先比戳**：`bootRemote` / `pollRemote` 拿到后端那份后，如果脏戳比它的 `updatedAt` 新，说明
+  本地有没推上去的东西，反过来把本地推上去，而不是被旧的那份盖回来。
+- **跳页前把攒着的推送出去**：推送有 400ms 防抖，`pagehide` / `beforeunload` 时用 `navigator.sendBeacon("/api/data", …)`
+  兜一下（后端 `/api/data` 收 POST 和 PUT），点完任务立刻切页也不会丢。
+
 ## 控制台接口
 
 挂在 `window.spasreTasks` 上：
@@ -231,6 +257,16 @@ await spasreTasks.requestPlan("帮我排一下本周任务");    // 同上，但
 spasreTasks.linksFor(id);                            // 这条任务的延伸阅读（助手找过的都存在任务上）
 spasreTasks.openLinks(id);                           // 打开延伸阅读弹窗（没有现成的就自动问一次助手）
 spasreTasks.openLinkList("标题", links, { taskId: id, auto: false }); // 用现成链接开弹窗
+
+// 笔记
+spasreTasks.notes();                                  // 全部笔记
+spasreTasks.noteFor({ taskId: id });                  // 这条任务挂着的笔记（也接受 goalId/nodeId）
+spasreTasks.openNote({ taskId: id });                 // 有笔记就打开它，没有就新建一条再打开
+spasreTasks.createNote({ title: "…", category: "学习", taskId: id });
+spasreTasks.updateNote(id, { body: "…" });            // 改标题 / 正文 / 分类 / 关联
+spasreTasks.removeNote(id);
+spasreTasks.noteCategories();                         // 分类列表
+spasreTasks.addNoteCategory("读论文");                 // 加一个分类，重名会返回原来的
 
 // 长期目标
 spasreTasks.goals();                                 // 全部目标
@@ -310,10 +346,6 @@ spasreTasks.locked();                  // 被过期前置挡住、暂时不该�
 - 分类配色表在 `assets/js/tasks.js` 的 `CATEGORY_ACCENT`（学习=1、工作=2、生活=3、每日推荐=4），其它分类按名字散列到 1~5。
 - **改颜色要三处同步**：`:root`、`:root[data-theme="dark"]`、`@media (prefers-color-scheme: dark)` 三块里都定义了同一套变量，漏一处明暗模式就会不一致。页面 `<head>` 里的 `theme-color` 和 `site.js` 里的取色是两份硬编码的 `#f6f7fb` / `#121620`，换底色时别忘了。
 
-- 每个强调色都有 `-soft`（淡底）、`-line`（描边）和 `-rgb`（给 `rgba()` 用的分量）三个衍生值，明暗主题各一套。
-- 分类配色表在 `assets/js/tasks.js` 的 `CATEGORY_ACCENT`（学习=1、工作=2、生活=3、每日推荐=4），其它分类按名字散列到 1~5。
-- **改颜色要三处同步**：`:root`、`:root[data-theme="dark"]`、`@media (prefers-color-scheme: dark)` 三块里都定义了同一套变量，漏一处明暗模式就会不一致。
-
 ### 右下角按钮的位置
 
 「回到顶部」和「＋」共用一组几何变量，**都是同宽 + 同一个 `right`**，所以圆心天然在同一竖线上（窄屏改 `--dock-size` / `--dock-right` 也一起变）：
@@ -333,19 +365,22 @@ schedule.html              日程表（周 / 日 / 月三种看法，拖时间�
 settings.html              设置（外观 + 兴趣标签 + 助手配置）
 tasks.html                 任务板（任务、回收站、助手对话）
 goals.html                 目标（文本大纲 + 学习路线图 + 新建目标四步向导）
+notes.html                 笔记（分类、列表、编辑；能挂到任务或知识点上）
 serve.ps1                  本地起服务（默认走后端；-Static 退回纯静态）
 server.py                  后端：静态服务 + 配置存储 + 技能运行（只用标准库）
 skills/                    技能目录，丢一个 .py 进来就自动被发现（改过的会自己重载）
 skills/diagram_roadmap.py  画学习路线图（调 skills/vendor/archify，输出到 diagrams/）
+skills/plan_outline.py     改大纲 / 读一份贴进来的规划（plan.outline）
 skills/vendor/archify/     vendored 的 Archify（MIT，v3.0.1，需 Node ≥18；仓库里不带它自带的 test/ 与 examples/）
 diagrams/                  画出来的学习路线图 HTML（同名重画会覆盖；.evidence/ 是校验证据）
 config/                    看板数据（config/data.json；用 --data 可以指到别处，试新用户流程就靠它）
 .env                       助手配置（接口地址 / 模型 / api key），只给 server.py 读，不是终端的环境文件
 .vscode/settings.json      不让 Python 扩展把这个 .env 注入集成终端
-assets/css/style.css       全站样式（四页共用，主题变量都在这）
+assets/css/style.css       全站样式（各页共用，主题变量都在这）
 assets/js/site.js          主题切换、花瓣飘落、回到顶部、滚动动画
 assets/js/tasks.js         任务板逻辑、时间段定义（存在设置里）、助手与 window.spasreTasks 接口（目标和聊天记录也在这里）
 assets/js/interest-lib.js  兴趣方向库 + 一步挑多个方向的界面（引导和设置页共用）
+assets/js/notes.js         笔记页：分类、列表、编辑（数据还是走 window.spasreTasks）
 assets/js/settings.js      设置页：兴趣标签的推荐
 assets/js/onboard.js       新用户引导：要不要每日推荐 → 挑方向 → 配模型
 assets/js/goals.js         长期目标 + 日程表：拓扑排序、大纲、统一排期、日程表网格（首页和目标页都加载，找不到对应区块就跳过）
